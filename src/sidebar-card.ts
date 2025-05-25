@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.1';
+const SIDEBAR_CARD_VERSION = '0.1.9.6.2';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -44,6 +44,9 @@ class SidebarCard extends LitElement {
   period = false;
   date = false;
   dateFormat = 'DD MMMM';
+  weather = false;
+  weatherEntity = '';
+  weatherFormat = 'temperature_unit';
   bottomCard: any = null;
   CUSTOM_TYPE_PREFIX = 'custom:';
 
@@ -83,6 +86,9 @@ class SidebarCard extends LitElement {
     this.period = this.config.period ? this.config.period : false;
     this.date = this.config.date ? this.config.date : false;
     this.dateFormat = this.config.dateFormat ? this.config.dateFormat : 'DD MMMM';
+    this.weather = this.config.weather ? this.config.weather : false;
+    this.weatherEntity = this.config.weatherEntity ? this.config.weatherEntity : '';
+    this.weatherFormat = this.config.weatherFormat ? this.config.weatherFormat : 'temperature_unit';
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
 
@@ -121,6 +127,19 @@ class SidebarCard extends LitElement {
         ${this.date
           ? html`
               <h2 class="date"></h2>
+            `
+          : html``}
+        ${this.weather && this.weatherEntity
+          ? html`
+              <div class="weather-widget">
+                <div class="weather-icon">
+                  <i class="meteo-icon"></i>
+                </div>
+                <div class="weather-info">
+                  <span class="weather-temp"></span>
+                  <span class="weather-desc"></span>
+                </div>
+              </div>
             `
           : html``}
         ${sidebarMenu && sidebarMenu.length > 0
@@ -234,6 +253,75 @@ class SidebarCard extends LitElement {
     this.shadowRoot.querySelector('.date').textContent = now.format(this.dateFormat);
   }
 
+  _runWeather() {
+    if (!this.weather || !this.weatherEntity || !this.hass.states[this.weatherEntity]) {
+      return;
+    }
+
+    const weatherState = this.hass.states[this.weatherEntity];
+    const weatherIcon = this.shadowRoot.querySelector('.meteo-icon');
+    const weatherTemp = this.shadowRoot.querySelector('.weather-temp');
+    const weatherDesc = this.shadowRoot.querySelector('.weather-desc');
+
+    if (weatherIcon && weatherTemp && weatherDesc) {
+      // Map Home Assistant weather states to Meteo icons
+      const iconMapping = {
+        'clear-night': 'wi-night-clear',
+        'cloudy': 'wi-cloudy',
+        'fog': 'wi-fog',
+        'hail': 'wi-hail',
+        'lightning': 'wi-lightning',
+        'lightning-rainy': 'wi-storm-showers',
+        'partlycloudy': 'wi-day-cloudy',
+        'pouring': 'wi-rain',
+        'rainy': 'wi-showers',
+        'snowy': 'wi-snow',
+        'snowy-rainy': 'wi-sleet',
+        'sunny': 'wi-day-sunny',
+        'windy': 'wi-windy',
+        'windy-variant': 'wi-strong-wind',
+        'exceptional': 'wi-alien'
+      };
+
+      // Set weather icon
+      const iconClass = iconMapping[weatherState.state] || 'wi-na';
+      weatherIcon.className = `meteo-icon ${iconClass}`;
+
+      // Set temperature
+      const temp = Math.round(weatherState.attributes.temperature);
+      const unit = this.weatherFormat === 'temperature_unit' 
+        ? weatherState.attributes.unit_of_measurement || '°C'
+        : (this.weatherFormat || '°C');
+      weatherTemp.textContent = `${temp}${unit}`;
+
+      // Set description
+      const condition = weatherState.attributes.friendly_name || weatherState.state;
+      weatherDesc.textContent = this._formatWeatherCondition(weatherState.state);
+    }
+  }
+
+  _formatWeatherCondition(condition) {
+    const conditionMapping = {
+      'clear-night': 'Clear night',
+      'cloudy': 'Cloudy',
+      'fog': 'Fog',
+      'hail': 'Hail',
+      'lightning': 'Lightning',
+      'lightning-rainy': 'Storm',
+      'partlycloudy': 'Partly cloudy',
+      'pouring': 'Pouring',
+      'rainy': 'Rainy',
+      'snowy': 'Snowy',
+      'snowy-rainy': 'Sleet',
+      'sunny': 'Sunny',
+      'windy': 'Windy',
+      'windy-variant': 'Very windy',
+      'exceptional': 'Exceptional'
+    };
+
+    return conditionMapping[condition] || condition.charAt(0).toUpperCase() + condition.slice(1);
+  }
+
   updateSidebarSize(root) {
     const sidebarInner = this.shadowRoot.querySelector('.sidebar-inner');
     const header = root.shadowRoot.querySelector('ch-header') || root.shadowRoot.querySelector('app-header');
@@ -274,6 +362,13 @@ class SidebarCard extends LitElement {
       self._runDate();
       setInterval(function() {
         self._runDate();
+      }, inc);
+    }
+    if (this.weather) {
+      const inc = 1000 * 60 * 5; // Update every 5 minutes
+      self._runWeather();
+      setInterval(function() {
+        self._runWeather();
       }, inc);
     }
 
@@ -527,6 +622,69 @@ class SidebarCard extends LitElement {
         white-space: normal;
       }
 
+      .weather-widget {
+        display: flex;
+        align-items: center;
+        margin: 15px 0 20px 0;
+        color: var(--sidebar-text-color, #000);
+        cursor: default;
+      }
+
+      .weather-icon {
+        margin-right: 15px;
+        font-size: 40px;
+        width: 50px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .meteo-icon {
+        font-family: 'Weather Icons', sans-serif;
+        font-style: normal;
+        font-weight: normal;
+        display: inline-block;
+        color: var(--sidebar-text-color, #000);
+      }
+
+      .weather-info {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+      }
+
+      .weather-temp {
+        font-size: 22px;
+        font-weight: 300;
+        line-height: 24px;
+        margin-bottom: 2px;
+      }
+
+      .weather-desc {
+        font-size: 16px;
+        font-weight: 200;
+        opacity: 0.8;
+        line-height: 18px;
+      }
+
+      /* Weather Icons CSS Classes */
+      .wi-day-sunny:before { content: "\\f00d"; }
+      .wi-day-cloudy:before { content: "\\f002"; }
+      .wi-cloudy:before { content: "\\f013"; }
+      .wi-showers:before { content: "\\f009"; }
+      .wi-rain:before { content: "\\f019"; }
+      .wi-storm-showers:before { content: "\\f00e"; }
+      .wi-lightning:before { content: "\\f016"; }
+      .wi-snow:before { content: "\\f01b"; }
+      .wi-sleet:before { content: "\\f0b5"; }
+      .wi-fog:before { content: "\\f014"; }
+      .wi-hail:before { content: "\\f015"; }
+      .wi-night-clear:before { content: "\\f02e"; }
+      .wi-windy:before { content: "\\f021"; }
+      .wi-strong-wind:before { content: "\\f050"; }
+      .wi-alien:before { content: "\\f075"; }
+      .wi-na:before { content: "\\f07b"; }
+
       .clock {
         margin: 20px 0;
         position: relative;
@@ -729,7 +887,7 @@ function createCSS(sidebarConfig: any, width: number) {
         `;
       }
     } else {
-      if (sidebarConfig.width.tablet == 0) {
+      if (sidebarConfig.width.desktop == 0) {
         css +=
           `
           #customSidebar {
