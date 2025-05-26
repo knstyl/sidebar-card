@@ -31,14 +31,22 @@
     "@rollup/plugin-json": "^4.0.0",
     "@typescript-eslint/eslint-plugin": "^4.31.0",
     "@typescript-eslint/parser": "^4.31.0",
+    "@wdio/browser-runner": "^9.14.0",
+    "@wdio/cli": "^9.14.0",
+    "@wdio/mocha-framework": "^9.14.0",
+    "@wdio/spec-reporter": "^9.14.0",
+    "@wdio/visual-service": "^8.0.4",
     "acorn": ">=7.3.1",
     "eslint": "^7.18.0",
     "eslint-config-airbnb-base": "^14.0.0",
     "eslint-config-prettier": "^6.5.0",
     "eslint-plugin-import": "^2.18.2",
     "eslint-plugin-prettier": "^3.1.1",
+    "jasmine": "^5.7.1",
+    "lit": "^3.3.0",
     "lodash": ">=4.17.21",
     "minimist": ">=1.2.3",
+    "mocha": "^11.5.0",
     "prettier": "^1.18.2",
     "rollup": "^2.79.2",
     "rollup-plugin-babel": "^4.3.3",
@@ -54,6 +62,9 @@
     "start": "rollup -c --watch",
     "build": "npm run lint && npm run rollup",
     "lint": "eslint src/*.ts",
-    "rollup": "rollup -c"
+    "rollup": "rollup -c",
+    "test": "wdio run wdio.conf.ts",
+    "test:headless": "wdio run wdio.conf.ts",
+    "test:watch": "wdio run wdio.conf.ts --watch"
   }
 }
