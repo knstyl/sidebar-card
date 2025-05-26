@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.2';
+const SIDEBAR_CARD_VERSION = '0.1.9.6.4';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -75,6 +75,10 @@ class SidebarCard extends LitElement {
    * **************************************** */
 
   render() {
+    if (!this.config) {
+      console.error("Config is empty!");
+      return;
+    }
     const sidebarMenu = this.config.sidebarMenu;
     const title = 'title' in this.config ? this.config.title : false;
     const addStyle = 'style' in this.config;
@@ -264,28 +268,39 @@ class SidebarCard extends LitElement {
     const weatherDesc = this.shadowRoot.querySelector('.weather-desc');
 
     if (weatherIcon && weatherTemp && weatherDesc) {
-      // Map Home Assistant weather states to Meteo icons
+      // Map Home Assistant weather states to Weather Icons with emoji fallbacks
       const iconMapping = {
-        'clear-night': 'wi-night-clear',
-        'cloudy': 'wi-cloudy',
-        'fog': 'wi-fog',
-        'hail': 'wi-hail',
-        'lightning': 'wi-lightning',
-        'lightning-rainy': 'wi-storm-showers',
-        'partlycloudy': 'wi-day-cloudy',
-        'pouring': 'wi-rain',
-        'rainy': 'wi-showers',
-        'snowy': 'wi-snow',
-        'snowy-rainy': 'wi-sleet',
-        'sunny': 'wi-day-sunny',
-        'windy': 'wi-windy',
-        'windy-variant': 'wi-strong-wind',
-        'exceptional': 'wi-alien'
+        'clear-night': { icon: 'wi-night-clear', emoji: '🌙' },
+        'cloudy': { icon: 'wi-cloudy', emoji: '☁️' },
+        'fog': { icon: 'wi-fog', emoji: '🌫️' },
+        'hail': { icon: 'wi-hail', emoji: '🧊' },
+        'lightning': { icon: 'wi-lightning', emoji: '⚡' },
+        'lightning-rainy': { icon: 'wi-storm-showers', emoji: '⛈️' },
+        'partlycloudy': { icon: 'wi-day-cloudy', emoji: '⛅' },
+        'pouring': { icon: 'wi-rain', emoji: '🌧️' },
+        'rainy': { icon: 'wi-showers', emoji: '🌦️' },
+        'snowy': { icon: 'wi-snow', emoji: '❄️' },
+        'snowy-rainy': { icon: 'wi-sleet', emoji: '🌨️' },
+        'sunny': { icon: 'wi-day-sunny', emoji: '☀️' },
+        'windy': { icon: 'wi-windy', emoji: '💨' },
+        'windy-variant': { icon: 'wi-strong-wind', emoji: '🌪️' },
+        'exceptional': { icon: 'wi-alien', emoji: '❓' }
       };
 
-      // Set weather icon
-      const iconClass = iconMapping[weatherState.state] || 'wi-na';
-      weatherIcon.className = `meteo-icon ${iconClass}`;
+      // Set weather icon with fallback to emoji
+      const weatherMapping = iconMapping[weatherState.state] || { icon: 'wi-na', emoji: '❓' };
+      
+      // Try to use weather icon, fallback to emoji if font not loaded
+      weatherIcon.className = `meteo-icon ${weatherMapping.icon}`;
+      
+      // Check if weather icon font is loaded, if not use emoji
+      setTimeout(() => {
+        const computedStyle = window.getComputedStyle(weatherIcon, ':before');
+        if (computedStyle.content === 'none' || computedStyle.content === '""') {
+          weatherIcon.innerHTML = weatherMapping.emoji;
+          weatherIcon.className = 'meteo-icon emoji-fallback';
+        }
+      }, 100);
 
       // Set temperature
       const temp = Math.round(weatherState.attributes.temperature);
@@ -343,6 +358,7 @@ class SidebarCard extends LitElement {
   firstUpdated() {
     provideHass(this);
     let root = getRoot();
+    if (!root) return;
     root.shadowRoot.querySelectorAll('paper-tab').forEach((paperTab) => {
       log2console('firstUpdated', 'Menu item found');
       paperTab.addEventListener('click', () => {
@@ -640,11 +656,17 @@ class SidebarCard extends LitElement {
       }
 
       .meteo-icon {
-        font-family: 'Weather Icons', sans-serif;
+        font-family: 'WeatherIcons-Regular', 'Weather Icons', sans-serif;
         font-style: normal;
         font-weight: normal;
         display: inline-block;
         color: var(--sidebar-text-color, #000);
+        speak: none;
+        text-decoration: inherit;
+        text-transform: none;
+        text-rendering: auto;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
 
       .weather-info {
@@ -667,7 +689,10 @@ class SidebarCard extends LitElement {
         line-height: 18px;
       }
 
-      /* Weather Icons CSS Classes */
+      .meteo-icon.emoji-fallback {
+        font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+        font-size: 32px;
+      }
       .wi-day-sunny:before { content: "\\f00d"; }
       .wi-day-cloudy:before { content: "\\f002"; }
       .wi-cloudy:before { content: "\\f013"; }
@@ -786,6 +811,7 @@ function createCSS(sidebarConfig: any, width: number) {
   let sidebarResponsive = false;
   let headerHeightPx = getHeaderHeightPx();
 
+  console.info(`sideBarConfig: ${JSON.stringify(sidebarConfig)}`)
   if (sidebarConfig.width) {
     if (typeof sidebarConfig.width == 'number') {
       sidebarWidth = sidebarConfig.width;
@@ -1172,6 +1198,7 @@ async function getConfig() {
   let lovelace: any;
   while (!lovelace) {
     lovelace = getLovelace();
+    console.info("Retrieving lovelace...");
     if (!lovelace) {
       await sleep(500);
     }
@@ -1191,7 +1218,9 @@ function createElementFromHTML(htmlString: string) {
 // ##########################################################################################
 
 async function buildSidebar() {
+  console.info("in build.");
   const lovelace = await getConfig();
+  console.info(`lovelace: ${JSON.stringify(lovelace)}`)
   if (lovelace.config.sidebar) {
     const sidebarConfig = Object.assign({}, lovelace.config.sidebar);
     if (!sidebarConfig.width || (sidebarConfig.width && typeof sidebarConfig.width == 'number' && sidebarConfig.width > 0 && sidebarConfig.width < 100) || (sidebarConfig.width && typeof sidebarConfig.width == 'object')) {
@@ -1279,5 +1308,6 @@ console.info(
   'color: white; background: dimgrey; font-weight: 700;'
 );
 
+console.info("Test some more info...");
 buildSidebar();
 watchLocationChange();
