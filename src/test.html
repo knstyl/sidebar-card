@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sidebar Card Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+        }
+        
+        .test-container {
+            width: 350px;
+            height: 600px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            overflow: hidden;
+            position: relative;
+            transition: width 0.3s ease;
+        }
+        
+        sidebar-card {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        .controls {
+            margin-top: 20px;
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .controls h3 {
+            color: white;
+            margin-top: 0;
+            grid-column: span 2;
+        }
+        
+        .control-section {
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        .control-section h4 {
+            color: white;
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+        
+        .controls button {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            margin: 3px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            display: block;
+            width: calc(100% - 6px);
+        }
+        
+        .controls button:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .width-slider {
+            width: 100%;
+            margin: 10px 0;
+            background: rgba(255,255,255,0.3);
+            border-radius: 10px;
+            height: 6px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .width-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        
+        .width-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        
+        .width-display {
+            color: white;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: center;
+            margin-top: 5px;
+        }
+        
+        .debug-info {
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h2 style="color: white; margin-bottom: 20px;">Sidebar Card Test</h2>
+    
+    <div class="test-container">
+        <sidebar-card id="sidebarCard"></sidebar-card>
+    </div>
+    
+    <div class="controls">
+        <h3>Test Controls</h3>
+        
+        <div class="control-section">
+            <h4>📐 Sidebar Width Config</h4>
+            <input type="range" 
+                   class="width-slider" 
+                   id="widthConfigSlider"
+                   min="15" 
+                   max="50" 
+                   value="25" 
+                   oninput="updateWidthConfig(this.value)">
+            <div class="width-display" id="widthConfigDisplay">Width Config: 25%</div>
+            <button onclick="setWidthConfig(20)">Narrow (20%)</button>
+            <button onclick="setWidthConfig(25)">Default (25%)</button>
+            <button onclick="setWidthConfig(35)">Wide (35%)</button>
+            <button onclick="testResponsiveWidth()">Test Responsive</button>
+        </div>
+        
+        <div class="control-section">
+            <h4>⚙️ Configuration Tests</h4>
+            <button onclick="testBasicConfig()">Basic Config</button>
+            <button onclick="testWithClock()">With Clock</button>
+            <button onclick="testWithWeather()">With Weather</button>
+            <button onclick="testFullConfig()">Full Config</button>
+            <button onclick="clearConfig()">Clear</button>
+        </div>
+    </div>
+    
+    <div class="debug-info" id="debugInfo">
+        <strong>Debug Log:</strong><br>
+        Waiting for sidebar-card.js to load...
+    </div>
+
+    <!-- Import your existing sidebar card -->
+    <script type="module" src="../dist/sidebar-card.js"></script>
+    
+    <!-- Fallback dependencies in case they're missing -->
+    <script type="module">
+        // Check if lit-element is available, if not provide fallback
+        if (!window.LitElement) {
+            console.log('Loading lit-element fallback...');
+            import('https://unpkg.com/lit@3.0.0/index.js').then(module => {
+                window.LitElement = module.LitElement;
+                window.html = module.html;
+                window.css = module.css;
+                console.log('✅ Lit dependencies loaded');
+            }).catch(e => console.error('❌ Failed to load Lit:', e));
+        }
+        
+        // Mock card-tools if missing
+        if (!window.moreInfo) {
+            window.moreInfo = (entity) => console.log('Mock moreInfo called for:', entity);
+        }
+        if (!window.hass) {
+            window.hass = () => mockHassData;
+        }
+        if (!window.provideHass) {
+            window.provideHass = (element) => {
+                if (element && mockHassData) {
+                    element.hass = mockHassData;
+                }
+            };
+        }
+        if (!window.subscribeRenderTemplate) {
+            window.subscribeRenderTemplate = () => console.log('Mock subscribeRenderTemplate called');
+        }
+        
+        // Mock custom-card-helpers
+        if (!window.forwardHaptic) {
+            window.forwardHaptic = (type) => console.log('Mock haptic:', type);
+        }
+        if (!window.navigate) {
+            window.navigate = (window, path) => console.log('Mock navigate to:', path);
+        }
+        if (!window.toggleEntity) {
+            window.toggleEntity = (hass, entity) => console.log('Mock toggle:', entity);
+        }
+    </script>
+    
+    <!-- OR if it's in a different path, adjust accordingly: -->
+    <!-- <script type="module" src="../path/to/your/sidebar-card.js"></script> -->
+    
+    <script>
+        const debugEl = document.getElementById('debugInfo');
+        
+        function log(message) {
+            console.log(message);
+            const timestamp = new Date().toLocaleTimeString();
+            debugEl.innerHTML += `<br>[${timestamp}] ${message}`;
+            debugEl.scrollTop = debugEl.scrollHeight;
+        }
+        
+        // Mock Home Assistant environment
+        const mockHassData = {
+            states: {
+                'weather.home': {
+                    state: 'sunny',
+                    attributes: {
+                        temperature: 22,
+                        unit_of_measurement: '°C',
+                        friendly_name: 'Home Weather',
+                        humidity: 65,
+                        pressure: 1013
+                    }
+                },
+                'weather.openweathermap': {
+                    state: 'partlycloudy',
+                    attributes: {
+                        temperature: 18,
+                        unit_of_measurement: '°C',
+                        friendly_name: 'OpenWeatherMap'
+                    }
+                },
+                'light.living_room': {
+                    state: 'on',
+                    attributes: {
+                        friendly_name: 'Living Room Light'
+                    }
+                },
+                'light.bedroom': {
+                    state: 'off',
+                    attributes: {
+                        friendly_name: 'Bedroom Light'
+                    }
+                }
+            },
+            language: 'en',
+            callService: (domain, service, data) => {
+                log(`Service called: ${domain}.${service} with data: ${JSON.stringify(data)}`);
+            }
+        };
+
+        window.hass = () => mockHassData;
+
+        // Mock other dependencies that might be needed
+        window.customCards = window.customCards || [];
+        
+        // Mock moment if not available
+        if (typeof window.moment === 'undefined') {
+            window.moment = function(date) {
+                const d = date ? new Date(date) : new Date();
+                return {
+                    locale: () => {},
+                    format: (format) => {
+                        if (format === 'DD MMMM') {
+                            return d.toLocaleDateString('en-US', { 
+                                day: '2-digit', 
+                                month: 'long' 
+                            });
+                        }
+                        if (format === 'dddd, MMMM DD') {
+                            return d.toLocaleDateString('en-US', { 
+                                weekday: 'long',
+                                month: 'long', 
+                                day: 'numeric' 
+                            });
+                        }
+                        return d.toLocaleDateString();
+                    }
+                };
+            };
+        }
+        
+        // Current config state
+        let currentConfig = {
+            title: "Smart Home",
+            digitalClock: true,
+            date: true,
+            weather: true,
+            weatherEntity: "weather.home",
+            width: 25 // Default width percentage
+        };
+        
+        // Width control functions
+        function updateWidthConfig(widthPercent) {
+            const widthConfigDisplay = document.getElementById('widthConfigDisplay');
+            widthConfigDisplay.textContent = `Width Config: ${widthPercent}%`;
+            
+            // Update current config
+            currentConfig.width = parseInt(widthPercent);
+            
+            // Apply to sidebar card
+            const sidebarCard = document.getElementById('sidebarCard');
+            if (sidebarCard && sidebarCard.setConfig) {
+                sidebarCard.setConfig({...currentConfig});
+                log(`📐 Sidebar width config changed to: ${widthPercent}% (${currentConfig.width})`);
+            }
+        }
+        
+        function setWidthConfig(widthPercent) {
+            const slider = document.getElementById('widthConfigSlider');
+            slider.value = widthPercent;
+            updateWidthConfig(widthPercent);
+        }
+        
+        function testResponsiveWidth() {
+            log('🔄 Testing responsive width configuration...');
+            const sidebarCard = document.getElementById('sidebarCard');
+            if (sidebarCard && sidebarCard.setConfig) {
+                const responsiveConfig = {
+                    ...currentConfig,
+                    width: {
+                        desktop: 25,
+                        tablet: 35,
+                        mobile: 0  // Hidden on mobile
+                    },
+                    breakpoints: {
+                        tablet: 1024,
+                        mobile: 768
+                    }
+                };
+                sidebarCard.setConfig(responsiveConfig);
+                log('📱 Responsive width config applied: Desktop 25%, Tablet 35%, Mobile hidden');
+            }
+        }
+        
+        // Test functions
+        function testBasicConfig() {
+            log('Testing basic config...');
+            currentConfig = {
+                title: "My Home",
+                width: currentConfig.width
+            };
+            const sidebarCard = document.getElementById('sidebarCard');
+            sidebarCard.setConfig(currentConfig);
+        }
+        
+        function testWithClock() {
+            log('Testing config with clock...');
+            currentConfig = {
+                title: "Smart Home",
+                digitalClock: true,
+                digitalClockWithSeconds: true,
+                date: true,
+                dateFormat: "dddd, MMMM DD",
+                width: currentConfig.width
+            };
+            const sidebarCard = document.getElementById('sidebarCard');
+            sidebarCard.setConfig(currentConfig);
+        }
+        
+        function testWithWeather() {
+            log('Testing config with weather...');
+            currentConfig = {
+                title: "Weather Test",
+                date: true,
+                weather: true,
+                weatherEntity: "weather.home",
+                weatherFormat: "°C",
+                width: currentConfig.width
+            };
+            const sidebarCard = document.getElementById('sidebarCard');
+            sidebarCard.setConfig(currentConfig);
+        }
+        
+        function testFullConfig() {
+            log('Testing full config...');
+            currentConfig = {
+                title: "Smart Home",
+                digitalClock: true,
+                digitalClockWithSeconds: false,
+                date: true,
+                dateFormat: "dddd, MMMM DD",
+                weather: true,
+                weatherEntity: "weather.home",
+                width: currentConfig.width,
+                sidebarMenu: [
+                    {
+                        name: "Home",
+                        icon: "mdi:home",
+                        action: "navigate",
+                        navigation_path: "/lovelace/0"
+                    },
+                    {
+                        name: "Living Room Light",
+                        icon: "mdi:lightbulb",
+                        action: "toggle",
+                        entity: "light.living_room",
+                        state: "light.living_room"
+                    },
+                    {
+                        name: "Bedroom Light",
+                        icon: "mdi:lightbulb-outline",
+                        action: "toggle",
+                        entity: "light.bedroom",
+                        state: "light.bedroom"
+                    },
+                    {
+                        name: "Camera",
+                        icon: "mdi:camera",
+                        action: "navigate",
+                        navigation_path: "/lovelace/cameras"
+                    },
+                    {
+                        name: "Energy",
+                        icon: "mdi:flash",
+                        action: "navigate",
+                        navigation_path: "/energy"
+                    }
+                ]
+            };
+            const sidebarCard = document.getElementById('sidebarCard');
+            sidebarCard.setConfig(currentConfig);
+        }
+        
+        function clearConfig() {
+            log('Clearing config...');
+            currentConfig = { width: currentConfig.width };
+            const sidebarCard = document.getElementById('sidebarCard');
+            sidebarCard.setConfig(currentConfig);
+        }
+        
+        // Wait for custom element to be defined
+        let elementCheckCount = 0;
+        const maxChecks = 10;
+        
+        function checkElement() {
+            elementCheckCount++;
+            log(`🔍 Check #${elementCheckCount}: Looking for sidebar-card...`);
+            
+            if (customElements.get('sidebar-card')) {
+                log('✅ sidebar-card custom element found!');
+                setupSidebarCard();
+            } else if (elementCheckCount < maxChecks) {
+                log('⏳ sidebar-card not ready yet, checking again in 1 second...');
+                setTimeout(checkElement, 1000);
+            } else {
+                log('❌ sidebar-card not found after ' + maxChecks + ' attempts');
+                log('💡 Troubleshooting steps:');
+                log('   1. Check that sidebar-card.js is in the same directory');
+                log('   2. Open browser console (F12) and look for error messages');
+                log('   3. Try updating the script src path');
+                log('   4. Check if your sidebar-card.js has any dependencies');
+                
+                // Try to show what custom elements ARE defined
+                const definedElements = [];
+                for (let name of customElements.getName ? customElements.getName() : []) {
+                    definedElements.push(name);
+                }
+                if (definedElements.length > 0) {
+                    log('📋 Other custom elements found: ' + definedElements.join(', '));
+                } else {
+                    log('📋 No custom elements found at all');
+                }
+            }
+        }
+        
+        function setupSidebarCard() {
+            const sidebarCard = document.getElementById('sidebarCard');
+            if (sidebarCard) {
+                log('🎯 Found sidebar card DOM element');
+                
+                // Check if it has the required methods
+                if (typeof sidebarCard.setConfig === 'function') {
+                    log('✅ setConfig method found');
+                } else {
+                    log('❌ setConfig method missing - component may not be fully loaded');
+                }
+                
+                // Set up the card with mock hass
+                sidebarCard.hass = mockHassData;
+                log('✅ Mock hass data attached to sidebar card');
+                
+                // Try to inspect the shadow DOM
+                setTimeout(() => {
+                    if (sidebarCard.shadowRoot) {
+                        log('✅ Shadow DOM found');
+                        const innerHTML = sidebarCard.shadowRoot.innerHTML;
+                        if (innerHTML.length > 0) {
+                            log('✅ Shadow DOM has content (' + innerHTML.length + ' characters)');
+                            log('🔍 First 200 chars: ' + innerHTML.substring(0, 200) + '...');
+                        } else {
+                            log('❌ Shadow DOM is empty');
+                        }
+                    } else {
+                        log('❌ No shadow DOM found');
+                    }
+                }, 500);
+                
+                // Start with a basic test
+                setTimeout(() => {
+                    log('🚀 Starting with full config test...');
+                    testFullConfig();
+                }, 1000);
+            } else {
+                log('❌ Could not find sidebar-card DOM element');
+            }
+        }
+        
+        // Start checking
+        setTimeout(checkElement, 500);
+        
+        // Additional error handling
+        window.addEventListener('error', (e) => {
+            log('❌ JavaScript Error: ' + e.message + ' at ' + e.filename + ':' + e.lineno);
+        });
+        
+        setTimeout(() => {
+            if (!customElements.get('sidebar-card')) {
+                log('⚠️  sidebar-card not found after 3 seconds');
+                log('💡 Check that sidebar-card.js is loading correctly');
+                log('💡 Open browser console (F12) for more details');
+            }
+        }, 3000);
+    </script>
+</body>
+</html>
