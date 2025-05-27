@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.4';
+const SIDEBAR_CARD_VERSION = '0.1.9.6.10';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -75,10 +75,6 @@ class SidebarCard extends LitElement {
    * **************************************** */
 
   render() {
-    if (!this.config) {
-      console.error("Config is empty!");
-      return;
-    }
     const sidebarMenu = this.config.sidebarMenu;
     const title = 'title' in this.config ? this.config.title : false;
     const addStyle = 'style' in this.config;
@@ -261,56 +257,45 @@ class SidebarCard extends LitElement {
     if (!this.weather || !this.weatherEntity || !this.hass.states[this.weatherEntity]) {
       return;
     }
-
+  
     const weatherState = this.hass.states[this.weatherEntity];
     const weatherIcon = this.shadowRoot.querySelector('.meteo-icon');
     const weatherTemp = this.shadowRoot.querySelector('.weather-temp');
     const weatherDesc = this.shadowRoot.querySelector('.weather-desc');
-
+    
     if (weatherIcon && weatherTemp && weatherDesc) {
-      // Map Home Assistant weather states to Weather Icons with emoji fallbacks
+      // Use Home Assistant's mdi icons - these are already loaded
       const iconMapping = {
-        'clear-night': { icon: 'wi-night-clear', emoji: '🌙' },
-        'cloudy': { icon: 'wi-cloudy', emoji: '☁️' },
-        'fog': { icon: 'wi-fog', emoji: '🌫️' },
-        'hail': { icon: 'wi-hail', emoji: '🧊' },
-        'lightning': { icon: 'wi-lightning', emoji: '⚡' },
-        'lightning-rainy': { icon: 'wi-storm-showers', emoji: '⛈️' },
-        'partlycloudy': { icon: 'wi-day-cloudy', emoji: '⛅' },
-        'pouring': { icon: 'wi-rain', emoji: '🌧️' },
-        'rainy': { icon: 'wi-showers', emoji: '🌦️' },
-        'snowy': { icon: 'wi-snow', emoji: '❄️' },
-        'snowy-rainy': { icon: 'wi-sleet', emoji: '🌨️' },
-        'sunny': { icon: 'wi-day-sunny', emoji: '☀️' },
-        'windy': { icon: 'wi-windy', emoji: '💨' },
-        'windy-variant': { icon: 'wi-strong-wind', emoji: '🌪️' },
-        'exceptional': { icon: 'wi-alien', emoji: '❓' }
+        'clear-night': 'mdi:weather-night',
+        'cloudy': 'mdi:weather-cloudy',
+        'fog': 'mdi:weather-fog',
+        'hail': 'mdi:weather-hail',
+        'lightning': 'mdi:weather-lightning',
+        'lightning-rainy': 'mdi:weather-lightning-rainy',
+        'partlycloudy': 'mdi:weather-partly-cloudy',
+        'pouring': 'mdi:weather-pouring',
+        'rainy': 'mdi:weather-rainy',
+        'snowy': 'mdi:weather-snowy',
+        'snowy-rainy': 'mdi:weather-snowy-rainy',
+        'sunny': 'mdi:weather-sunny',
+        'windy': 'mdi:weather-windy',
+        'windy-variant': 'mdi:weather-tornado',
+        'exceptional': 'mdi:alert-circle'
       };
-
-      // Set weather icon with fallback to emoji
-      const weatherMapping = iconMapping[weatherState.state] || { icon: 'wi-na', emoji: '❓' };
+  
+      const iconName = iconMapping[weatherState.state] || 'mdi:help-circle';
       
-      // Try to use weather icon, fallback to emoji if font not loaded
-      weatherIcon.className = `meteo-icon ${weatherMapping.icon}`;
+      // Create ha-icon element (Home Assistant's icon component)
+      weatherIcon.innerHTML = `<ha-icon icon="${iconName}"></ha-icon>`;
       
-      // Check if weather icon font is loaded, if not use emoji
-      setTimeout(() => {
-        const computedStyle = window.getComputedStyle(weatherIcon, ':before');
-        if (computedStyle.content === 'none' || computedStyle.content === '""') {
-          weatherIcon.innerHTML = weatherMapping.emoji;
-          weatherIcon.className = 'meteo-icon emoji-fallback';
-        }
-      }, 100);
-
       // Set temperature
       const temp = Math.round(weatherState.attributes.temperature);
       const unit = this.weatherFormat === 'temperature_unit' 
         ? weatherState.attributes.unit_of_measurement || '°C'
         : (this.weatherFormat || '°C');
       weatherTemp.textContent = `${temp}${unit}`;
-
-      // Set description
-      const condition = weatherState.attributes.friendly_name || weatherState.state;
+  
+      // Set description  
       weatherDesc.textContent = this._formatWeatherCondition(weatherState.state);
     }
   }
@@ -344,7 +329,7 @@ class SidebarCard extends LitElement {
     let headerHeightPx = getHeaderHeightPx();
     
     if (sidebarInner) {
-      sidebarInner.style.width = this.offsetWidth + 'px';
+      sidebarInner.style.width = '350' + 'px';
       if(this.config.hideTopMenu) {
         sidebarInner.style.height = `${window.innerHeight}px`;
         sidebarInner.style.top = '0px';
@@ -810,8 +795,6 @@ function createCSS(sidebarConfig: any, width: number) {
   let contentWidth = 75;
   let sidebarResponsive = false;
   let headerHeightPx = getHeaderHeightPx();
-
-  console.info(`sideBarConfig: ${JSON.stringify(sidebarConfig)}`)
   if (sidebarConfig.width) {
     if (typeof sidebarConfig.width == 'number') {
       sidebarWidth = sidebarConfig.width;
@@ -1198,7 +1181,6 @@ async function getConfig() {
   let lovelace: any;
   while (!lovelace) {
     lovelace = getLovelace();
-    console.info("Retrieving lovelace...");
     if (!lovelace) {
       await sleep(500);
     }
@@ -1218,9 +1200,7 @@ function createElementFromHTML(htmlString: string) {
 // ##########################################################################################
 
 async function buildSidebar() {
-  console.info("in build.");
   const lovelace = await getConfig();
-  console.info(`lovelace: ${JSON.stringify(lovelace)}`)
   if (lovelace.config.sidebar) {
     const sidebarConfig = Object.assign({}, lovelace.config.sidebar);
     if (!sidebarConfig.width || (sidebarConfig.width && typeof sidebarConfig.width == 'number' && sidebarConfig.width > 0 && sidebarConfig.width < 100) || (sidebarConfig.width && typeof sidebarConfig.width == 'object')) {
@@ -1308,6 +1288,5 @@ console.info(
   'color: white; background: dimgrey; font-weight: 700;'
 );
 
-console.info("Test some more info...");
 buildSidebar();
 watchLocationChange();
