@@ -5,6 +5,7 @@ import babel from 'rollup-plugin-babel';
 import { terser } from 'rollup-plugin-terser';
 import serve from 'rollup-plugin-serve';
 import json from '@rollup/plugin-json';
+import url from '@rollup/plugin-url';
 
 const dev = process.env.ROLLUP_WATCH;
 
@@ -34,6 +35,11 @@ const plugins = [
   }),
   dev && serve(serveopts),
   !dev && terser(),
+  url({
+    include: ['**/*.svg'],
+    limit: 0,
+    fileName: '[name][extname]'
+  })
 ];
 
 export default [

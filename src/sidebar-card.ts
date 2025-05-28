@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.10';
+const SIDEBAR_CARD_VERSION = '0.1.9.6.8';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -21,6 +21,25 @@ import { hass, provideHass } from 'card-tools/src/hass';
 import { subscribeRenderTemplate } from 'card-tools/src/templates';
 import moment from 'moment/min/moment-with-locales';
 import { forwardHaptic, navigate, toggleEntity } from 'custom-card-helpers';
+
+const weatherIconUrls = {
+  'clear-night': '/local/weather-icons/meteocons/clear-night.svg',
+  'cloudy': '/local/weather-icons/meteocons/cloudy.svg',
+  'fog': '/local/weather-icons/meteocons/fog.svg',
+  'hail': '/local/weather-icons/meteocons/hail.svg',
+  'lightning': '/local/weather-icons/meteocons/thunderstorms.svg',
+  'lightning-rainy': '/local/weather-icons/meteocons/thunderstorms.svg',
+  'partlycloudy': '/local/weather-icons/meteocons/partly-cloudy-day.svg',
+  'pouring': '/local/weather-icons/meteocons/rain.svg',
+  'rainy': '/local/weather-icons/meteocons/rain.svg',
+  'snowy': '/local/weather-icons/meteocons/snow.svg',
+  'snowy-rainy': '/local/weather-icons/meteocons/sleet.svg',
+  'sunny': '/local/weather-icons/meteocons/clear-day.svg',
+  'windy': '/local/weather-icons/meteocons/wind.svg',
+  'windy-variant': '/local/weather-icons/meteocons/wind.svg',
+  'exceptional': '/local/weather-icons/meteocons/cloudy.svg'
+};
+
 
 // ##########################################################################################
 // ###   The actual Sidebar Card element
@@ -262,32 +281,15 @@ class SidebarCard extends LitElement {
     const weatherIcon = this.shadowRoot.querySelector('.meteo-icon');
     const weatherTemp = this.shadowRoot.querySelector('.weather-temp');
     const weatherDesc = this.shadowRoot.querySelector('.weather-desc');
-    
+
     if (weatherIcon && weatherTemp && weatherDesc) {
-      // Use Home Assistant's mdi icons - these are already loaded
-      const iconMapping = {
-        'clear-night': 'mdi:weather-night',
-        'cloudy': 'mdi:weather-cloudy',
-        'fog': 'mdi:weather-fog',
-        'hail': 'mdi:weather-hail',
-        'lightning': 'mdi:weather-lightning',
-        'lightning-rainy': 'mdi:weather-lightning-rainy',
-        'partlycloudy': 'mdi:weather-partly-cloudy',
-        'pouring': 'mdi:weather-pouring',
-        'rainy': 'mdi:weather-rainy',
-        'snowy': 'mdi:weather-snowy',
-        'snowy-rainy': 'mdi:weather-snowy-rainy',
-        'sunny': 'mdi:weather-sunny',
-        'windy': 'mdi:weather-windy',
-        'windy-variant': 'mdi:weather-tornado',
-        'exceptional': 'mdi:alert-circle'
-      };
+
+    // Get the icon URL
+    const iconUrl = weatherIconUrls[weatherState.state] || weatherIconUrls['sunny'];
+    
+    // Use img tag to display the SVG
+    weatherIcon.innerHTML = `<img src="${iconUrl}" alt="${weatherState.state}" class="weather-svg-icon">`;
   
-      const iconName = iconMapping[weatherState.state] || 'mdi:help-circle';
-      
-      // Create ha-icon element (Home Assistant's icon component)
-      weatherIcon.innerHTML = `<ha-icon icon="${iconName}"></ha-icon>`;
-      
       // Set temperature
       const temp = Math.round(weatherState.attributes.temperature);
       const unit = this.weatherFormat === 'temperature_unit' 
@@ -329,7 +331,7 @@ class SidebarCard extends LitElement {
     let headerHeightPx = getHeaderHeightPx();
     
     if (sidebarInner) {
-      sidebarInner.style.width = '350' + 'px';
+      sidebarInner.style.width = this.offsetWidth + 'px';
       if(this.config.hideTopMenu) {
         sidebarInner.style.height = `${window.innerHeight}px`;
         sidebarInner.style.top = '0px';
@@ -633,25 +635,27 @@ class SidebarCard extends LitElement {
 
       .weather-icon {
         margin-right: 15px;
-        font-size: 40px;
         width: 50px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 40px; /* Ensure consistent height */
+      }
+
+      .meteo-icon {
+        /* Keep existing styles but add: */
+        width: 48px;
+        height: 48px;
         display: flex;
         justify-content: center;
         align-items: center;
       }
 
-      .meteo-icon {
-        font-family: 'WeatherIcons-Regular', 'Weather Icons', sans-serif;
-        font-style: normal;
-        font-weight: normal;
-        display: inline-block;
-        color: var(--sidebar-text-color, #000);
-        speak: none;
-        text-decoration: inherit;
-        text-transform: none;
-        text-rendering: auto;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
+      .weather-svg-icon {
+        width: 48px !important;
+        height: 48px !important;
+        object-fit: contain;
+        display: block;
       }
 
       .weather-info {
