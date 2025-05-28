@@ -15,7 +15,9 @@
   "author": "Ian Richardson <iantrich@gmail.com>",
   "license": "MIT",
   "dependencies": {
+    "@bybas/weather-icons": "^2.0.0",
     "@ctrl/tinycolor": "^2.6.0",
+    "@rollup/plugin-url": "^8.0.2",
     "card-tools": "github:thomasloven/lovelace-card-tools",
     "custom-card-helpers": "^1.7",
     "home-assistant-js-websocket": "^4.4.0",
