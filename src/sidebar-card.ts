@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.7.1';
+const SIDEBAR_CARD_VERSION = '0.1.9.7.3';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -62,8 +62,20 @@ class NotificationsElement extends LitElement {
   hass: any;
   notifications: any = [];
 
+  /* **************************************** *
+   *        Element's public properties       *
+   * **************************************** */
+  static get properties() {
+    return {
+      hass: { type: Object },
+      notifications: { type: Array }
+    };
+  }
+
   constructor() {
     super();
+    this.hass = null;
+    this.notifications = [];
   }
 
   protected updated(changedProperties): void {
@@ -504,6 +516,7 @@ class SidebarCard extends LitElement {
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
     this.notifications = this.config.notifications ? this.config.notifications : false;
+    console.log(`sideBarMenu=${JSON.stringify(sidebarMenu)}`)
 
     return html`
       ${addStyle
@@ -834,6 +847,7 @@ class SidebarCard extends LitElement {
       this.shadowRoot.querySelectorAll('ul.sidebarMenu li[data-type="navigate"]').forEach((menuItem) => {
         menuItem.classList.remove('active');
       });
+      console.info(`pathName=${document.location.pathname}`)
       let activeEl = this.shadowRoot.querySelector('ul.sidebarMenu li[data-path="' + document.location.pathname + '"]');
       if (activeEl) {
         activeEl.classList.add('active');
