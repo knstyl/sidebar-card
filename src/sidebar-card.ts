@@ -915,16 +915,20 @@ class SidebarCard extends LitElement {
         height: 100%;
         display: flex;
         flex-direction: column;
-        --sidebar-background: linear-gradient(180deg, #9333ea 0%, #7e22ce 50%, #6b21a8 100%);
-        --sidebar-text-color: #fff;
-        --sidebar-icon-color: #fff;
-        --sidebar-selected-text-color: #fff;
-        --sidebar-selected-icon-color: #fff;
-        --sidebar-selected-background: rgba(255, 255, 255, 0.2);
+        /* Updated to match your dashboard's dark theme */
+        --sidebar-background: #1a1a1a;
+        --sidebar-text-color: #e1e5e9;
+        --sidebar-icon-color: #9ca3af;
+        --sidebar-selected-text-color: #ffffff;
+        --sidebar-selected-icon-color: #60a5fa;
+        --sidebar-selected-background: rgba(96, 165, 250, 0.15);
+        --sidebar-card-background: rgba(255, 255, 255, 0.05);
+        --sidebar-border-color: rgba(255, 255, 255, 0.08);
         background: var(--sidebar-background);
       }
+
       .sidebar-inner {
-        padding: 30px 24px;
+        padding: 24px 20px;
         display: flex;
         flex-direction: column;
         box-sizing: border-box;
@@ -932,167 +936,196 @@ class SidebarCard extends LitElement {
         width: 0;
         overflow: hidden auto;
       }
+
       .sidebarMenu {
         list-style: none;
-        margin: 30px 0;
+        margin: 24px 0;
         padding: 0;
         border-top: none;
         border-bottom: none;
       }
+
       .sidebarMenu li {
-        color: var(--sidebar-text-color, #fff);
+        color: var(--sidebar-text-color);
         position: relative;
-        padding: 16px 20px;
+        padding: 14px 16px;
         border-radius: 12px;
-        font-size: 16px;
+        font-size: 15px;
         line-height: 20px;
-        font-weight: 400;
+        font-weight: 500;
         white-space: normal;
         display: flex;
         align-items: center;
         justify-content: space-between;
         cursor: pointer;
-        transition: all 0.2s ease;
-        margin-bottom: 4px; /* Reduced from 8px */
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        margin-bottom: 4px;
+        background: transparent;
+        border: 1px solid transparent;
       }
 
       .sidebarMenu li:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+        background-color: rgba(255, 255, 255, 0.06);
+        border-color: var(--sidebar-border-color);
+        transform: translateX(2px);
       }
+
       .sidebarMenu li ha-icon {
-        color: var(--sidebar-icon-color, #fff);
+        color: var(--sidebar-icon-color);
         --mdc-icon-size: 20px;
-        margin-left: auto; /* Push icon to far right */
+        margin-left: auto;
         flex-shrink: 0;
+        transition: color 0.3s ease, transform 0.3s ease;
       }
-        
+
+      .sidebarMenu li:hover ha-icon {
+        color: var(--sidebar-selected-icon-color);
+        transform: scale(1.1);
+      }
+
       .sidebarMenu li.active {
         color: var(--sidebar-selected-text-color);
-        background-color: var(--sidebar-selected-background);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); /* Added subtle shadow */
-        transform: translateX(4px); /* Slight indent for active items */
-      }
-
-      .sidebarMenu li.active ha-icon {
-        color: var(--sidebar-selected-icon-color, #fff);
-      }
-
-      /* Add some spacing between text and icon */
-      .sidebarMenu li span {
-        flex: 1;
-        margin-right: 12px;
+        background: var(--sidebar-selected-background);
+        border-color: rgba(96, 165, 250, 0.3);
+        box-shadow: 0 4px 12px rgba(96, 165, 250, 0.15);
+        transform: translateX(4px);
       }
 
       .sidebarMenu li.active::before {
         content: '';
         position: absolute;
+        top: 0;
         left: 0;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 4px;
-        height: 60%;
-        background: #fbbf24; /* Golden accent color */
-        border-radius: 0 2px 2px 0;
-        display: block; /* Override the 'display: none' from original */
+        width: 100%;
+        height: 100%;
+        background-color: var(--sidebar-selected-icon-color, #000);
+        opacity: 0.12;
+        border-radius: 12px;
       }
 
+      .sidebarMenu li.active ha-icon {
+        color: var(--sidebar-selected-icon-color);
+      }
+
+      .sidebarMenu li span {
+        flex: 1;
+        margin-right: 12px;
+      }
+
+      /* Header Styles */
       h1 {
         margin-top: 0;
-        margin-bottom: 12px;
+        margin-bottom: 16px;
+        font-size: 42px;
+        line-height: 48px;
+        font-weight: 300;
+        color: var(--sidebar-text-color);
+        cursor: default;
+        letter-spacing: -0.025em;
+      }
+
+      h1.digitalClock {
         font-size: 48px;
         line-height: 56px;
-        font-weight: 300;
-        color: var(--sidebar-text-color, #fff);
-        cursor: default;
-        letter-spacing: -0.02em;
-      }
-      h1.digitalClock {
-        font-size: 56px;
-        line-height: 64px;
         font-weight: 200;
         cursor: default;
         letter-spacing: -0.03em;
+        color: #ffffff;
       }
+
       h1.digitalClock.with-seconds {
-        font-size: 48px;
-        line-height: 56px;
+        font-size: 42px;
+        line-height: 48px;
         cursor: default;
       }
+
       h1.digitalClock.with-title {
-        margin-bottom: 0;
+        margin-bottom: 8px;
         cursor: default;
       }
+
       h2 {
-        margin: 0 0 24px 0;
-        font-size: 18px;
-        line-height: 24px;
-        font-weight: 300;
-        color: var(--sidebar-text-color, #fff);
+        margin: 0 0 20px 0;
+        font-size: 16px;
+        line-height: 20px;
+        font-weight: 400;
+        color: var(--sidebar-text-color);
         cursor: default;
-        opacity: 0.9;
+        opacity: 0.8;
       }
+
+      /* Template Section */
       .template {
-        margin: 24px 0;
-        padding: 24px;
+        margin: 20px 0;
+        padding: 20px;
         list-style: none;
-        color: var(--sidebar-text-color, #fff);
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
+        color: var(--sidebar-text-color);
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
         backdrop-filter: blur(10px);
       }
 
       .template li {
         display: block;
         color: inherit;
-        font-size: 16px;
-        line-height: 22px;
+        font-size: 14px;
+        line-height: 20px;
         font-weight: 400;
         white-space: normal;
-        margin-bottom: 12px;
+        margin-bottom: 8px;
       }
 
       .template li:last-child {
         margin-bottom: 0;
       }
 
+      /* Weather Widget */
       .weather-widget {
         display: flex;
         align-items: center;
-        margin: 0 0 32px 0;
+        margin: 0 0 24px 0;
         padding: 20px;
-        background: transparent; /* Changed from rgba(255, 255, 255, 0.1) */
-        border-radius: 16px;
-        backdrop-filter: none; /* Removed blur effect */
-        color: var(--sidebar-text-color, #fff);
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+        color: var(--sidebar-text-color);
         cursor: default;
+        transition: all 0.3s ease;
+      }
+
+      .weather-widget:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(96, 165, 250, 0.3);
       }
 
       .weather-icon {
-        margin-right: 20px;
-        width: 64px;
-        height: 64px;
+        margin-right: 16px;
+        width: 56px;
+        height: 56px;
         display: flex;
         justify-content: center;
         align-items: center;
-        background: transparent; /* Changed from rgba(255, 255, 255, 0.15) */
-        border-radius: 12px;
+        background: rgba(96, 165, 250, 0.1);
+        border-radius: 10px;
         padding: 8px;
       }
 
       .meteo-icon {
-        width: 48px;
-        height: 48px;
+        width: 40px;
+        height: 40px;
         display: flex;
         justify-content: center;
         align-items: center;
       }
 
       .weather-svg-icon {
-        width: 48px !important;
-        height: 48px !important;
+        width: 40px !important;
+        height: 40px !important;
         object-fit: contain;
         display: block;
-        filter: brightness(0) invert(1);
+        filter: brightness(0) saturate(100%) invert(65%) sepia(78%) saturate(3893%) hue-rotate(200deg) brightness(104%) contrast(97%);
       }
 
       .weather-info {
@@ -1102,29 +1135,31 @@ class SidebarCard extends LitElement {
       }
 
       .weather-temp {
-        font-size: 28px;
-        font-weight: 300;
-        line-height: 32px;
-        margin-bottom: 4px;
+        font-size: 24px;
+        font-weight: 500;
+        line-height: 28px;
+        margin-bottom: 2px;
+        color: #ffffff;
       }
 
       .weather-desc {
-        font-size: 16px;
-        font-weight: 300;
-        opacity: 0.85;
-        line-height: 20px;
+        font-size: 14px;
+        font-weight: 400;
+        opacity: 0.8;
+        line-height: 16px;
       }
 
+      /* Clock Styles */
       .clock {
-        margin: 24px auto 32px auto;
+        margin: 20px auto 28px auto;
         position: relative;
-        padding-top: 60%;
-        width: 60%;
+        padding-top: 55%;
+        width: 55%;
         border-radius: 100%;
-        background: rgba(255, 255, 255, 0.95);
-        font-family: 'Montserrat';
-        border: 4px solid rgba(255, 255, 255, 0.3);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2), inset 0 2px 8px rgba(0, 0, 0, 0.1);
+        background: rgba(255, 255, 255, 0.08);
+        font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+        border: 2px solid var(--sidebar-border-color);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 2px 8px rgba(0, 0, 0, 0.2);
       }
 
       .clock .wrap {
@@ -1141,41 +1176,41 @@ class SidebarCard extends LitElement {
       .clock .hour {
         position: absolute;
         height: 28%;
-        width: 4px;
+        width: 3px;
         margin: auto;
         top: -27%;
         left: 0;
         bottom: 0;
         right: 0;
-        background: #6b21a8;
+        background: #e1e5e9;
         transform-origin: bottom center;
         transform: rotate(0deg);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         z-index: 1;
         border-radius: 2px;
       }
 
       .clock .minute {
         position: absolute;
-        height: 41%;
-        width: 3px;
-        top: -38%;
+        height: 38%;
+        width: 2px;
+        top: -35%;
         left: 0;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         transform: rotate(90deg);
       }
 
       .clock .second {
         position: absolute;
-        top: -48%;
-        height: 48%;
-        width: 2px;
+        top: -45%;
+        height: 45%;
+        width: 1px;
         margin: auto;
         left: 0;
         bottom: 0;
         right: 0;
-        border-radius: 2px;
-        background: #ec4899;
+        border-radius: 1px;
+        background: #60a5fa;
         transform-origin: bottom center;
         transform: rotate(180deg);
         z-index: 1;
@@ -1187,22 +1222,197 @@ class SidebarCard extends LitElement {
         left: 0;
         right: 0;
         bottom: 0;
-        width: 10px;
-        height: 10px;
+        width: 8px;
+        height: 8px;
         border-radius: 100px;
-        background: #7e22ce;
-        border: 2px solid #fff;
+        background: #60a5fa;
+        border: 2px solid #1a1a1a;
         margin: auto;
         z-index: 2;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
       }
 
+      /* Notifications Styles */
+      .notifications-container {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 16px 0;
+      }
+
+      .notification-card {
+        background: var(--sidebar-card-background);
+        border-radius: 12px;
+        padding: 16px;
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--sidebar-border-color);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        transition: all 0.3s ease;
+      }
+
+      .notification-card:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(96, 165, 250, 0.3);
+      }
+
+      .no-notifications {
+        text-align: center;
+        padding: 24px 16px;
+      }
+
+      .no-notifications-title {
+        color: var(--sidebar-text-color);
+        margin: 8px 0 4px 0;
+        font-size: 16px;
+        font-weight: 500;
+      }
+
+      .no-notifications-subtitle {
+        color: var(--sidebar-icon-color);
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .notification-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .notification-title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+      }
+
+      .notification-icon {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+      }
+
+      .notification-icon.error {
+        color: #ef4444;
+      }
+
+      .notification-icon.info {
+        color: #60a5fa;
+      }
+
+      .notification-icon.success {
+        color: #10b981;
+      }
+
+      .notification-icon.warning {
+        color: #f59e0b;
+      }
+
+      .notification-title {
+        color: var(--sidebar-text-color);
+        margin: 0;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .dismiss-icon-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 8px;
+        transition: background-color 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .dismiss-icon-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .dismiss-icon-btn svg {
+        width: 16px;
+        height: 16px;
+        color: var(--sidebar-icon-color);
+      }
+
+      .dismiss-icon-btn:hover svg {
+        color: var(--sidebar-text-color);
+      }
+
+      .notification-message {
+        color: var(--sidebar-text-color);
+        font-size: 14px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+        opacity: 0.9;
+      }
+
+      .notification-message .bullet-point {
+        margin-left: 16px;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+
+      .notification-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .notification-time {
+        color: var(--sidebar-icon-color);
+        font-size: 12px;
+      }
+
+      .dismiss-btn {
+        background: #60a5fa;
+        color: #ffffff;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .dismiss-btn:hover {
+        background: #3b82f6;
+        transform: translateY(-1px);
+      }
+
+      .dismiss-all-container {
+        text-align: center;
+        padding-top: 8px;
+      }
+
+      .dismiss-all-btn {
+        background: none;
+        border: none;
+        color: var(--sidebar-icon-color);
+        font-size: 14px;
+        cursor: pointer;
+        transition: color 0.2s ease;
+      }
+
+      .dismiss-all-btn:hover {
+        color: var(--sidebar-text-color);
+      }
+
+      /* Bottom Card */
       .bottom {
         display: flex;
         margin-top: auto;
         padding: 20px;
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
         backdrop-filter: blur(10px);
       }
 
@@ -1212,17 +1422,17 @@ class SidebarCard extends LitElement {
       }
 
       ::-webkit-scrollbar-track {
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.05);
         border-radius: 3px;
       }
 
       ::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.3);
+        background: rgba(96, 165, 250, 0.3);
         border-radius: 3px;
       }
 
       ::-webkit-scrollbar-thumb:hover {
-        background: rgba(255, 255, 255, 0.4);
+        background: rgba(96, 165, 250, 0.5);
       }
     `;
   }
