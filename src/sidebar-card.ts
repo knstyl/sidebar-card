@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.8';
+const SIDEBAR_CARD_VERSION = '0.1.9.7.1';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -21,6 +21,398 @@ import { hass, provideHass } from 'card-tools/src/hass';
 import { subscribeRenderTemplate } from 'card-tools/src/templates';
 import moment from 'moment/min/moment-with-locales';
 import { forwardHaptic, navigate, toggleEntity } from 'custom-card-helpers';
+
+
+// ##########################################################################################
+// ###   Notifications Element
+// ##########################################################################################
+interface HassEntity {
+  entity_id: string;
+  state: string;
+  attributes: {
+    [key: string]: any;
+    title?: string;
+    message?: string;
+    notification_id?: string;
+    created_at?: string;
+  };
+}
+
+interface HassStates {
+  [entity_id: string]: HassEntity;
+}
+
+interface Hass {
+  states: HassStates;
+  callService: (domain: string, service: string, data?: any) => void;
+  language?: string;
+}
+
+interface NotificationEntity extends HassEntity {
+  attributes: {
+    title: string;
+    message: string;
+    notification_id: string;
+    created_at: string;
+    [key: string]: any;
+  };
+}
+
+class NotificationsElement extends LitElement {
+  hass: any;
+  notifications: any = [];
+
+  constructor() {
+    super();
+  }
+
+  protected updated(changedProperties): void {
+    if (changedProperties.has('hass') && this.hass) {
+      this._updateNotifications();
+    }
+  }
+
+  private _updateNotifications(): void {
+    if (!this.hass || !this.hass.states) return;
+    
+    console.info(`hassStates=${JSON.stringify(Object.values(this.hass.states))}`)
+    const filteredNotifications = Object.values(this.hass.states)
+      .filter((entity: any) => 
+        entity.entity_id.startsWith('persistent_notification.') &&
+        entity.attributes.title !== undefined &&
+        entity.attributes.message !== undefined &&
+        entity.attributes.notification_id !== undefined &&
+        entity.attributes.created_at !== undefined
+      );
+    
+    this.notifications = filteredNotifications as NotificationEntity[];
+    this.notifications.sort((a, b) => new Date(b.attributes.created_at).getTime() - new Date(a.attributes.created_at).getTime());
+    
+    this.requestUpdate();
+  }
+
+  private _getNotificationIcon(title: string) {
+    const lowerTitle = title.toLowerCase();
+    if (lowerTitle.includes('invalid') || lowerTitle.includes('error') || lowerTitle.includes('failed')) {
+      return html`
+        <svg class="notification-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="15" y1="9" x2="9" y2="15"></line>
+          <line x1="9" y1="9" x2="15" y2="15"></line>
+        </svg>
+      `;
+    }
+    if (lowerTitle.includes('update') || lowerTitle.includes('available')) {
+      return html`
+        <svg class="notification-icon info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M12 8v4M12 16h.01"></path>
+        </svg>
+      `;
+    }
+    if (lowerTitle.includes('success') || lowerTitle.includes('completed')) {
+      return html`
+        <svg class="notification-icon success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="m9,12 3,3 8-8"></path>
+        </svg>
+      `;
+    }
+    return html`
+      <svg class="notification-icon warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="m21.73,18-8-14a2,2 0 0,0-3.48,0l-8,14A2,2 0 0,0,4,21H20A2,2 0 0,0,21.73,18Z"></path>
+        <line x1="12" y1="9" x2="12" y2="13"></line>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+    `;
+  }
+
+  private _getTimeAgo(createdAt: string): string {
+    const now = new Date();
+    const created = new Date(createdAt);
+    const diffInMinutes = Math.floor((now.getTime() - created.getTime()) / (1000 * 60));
+    
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes} minute${diffInMinutes !== 1 ? 's' : ''} ago`;
+    
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours} hour${diffInHours !== 1 ? 's' : ''} ago`;
+    
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays} day${diffInDays !== 1 ? 's' : ''} ago`;
+  }
+
+  private _formatMessage(message: string): string {
+    if (!message) return '';
+    
+    return message
+      .split('\n')
+      .map((line: string) => {
+        if (line.trim().startsWith('•')) {
+          return `<div class="bullet-point">• ${line.replace('•', '').trim()}</div>`;
+        }
+        return line.trim() ? `<div>${line}</div>` : '';
+      })
+      .filter((line: string) => line)
+      .join('');
+  }
+
+  private _dismissNotification(notificationId: string): void {
+    if (!this.hass) return;
+    
+    this.hass.callService('persistent_notification', 'dismiss', {
+      notification_id: notificationId
+    });
+  }
+
+  private _dismissAll(): void {
+    if (!this.hass || !this.notifications.length) return;
+    
+    this.notifications.forEach((notification: NotificationEntity) => {
+      this._dismissNotification(notification.attributes.notification_id);
+    });
+  }
+
+  protected render() {
+    if (!this.notifications || this.notifications.length === 0) {
+      return html`
+        <div class="notifications-container">
+          <div class="notification-card no-notifications">
+            <svg class="notification-icon success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="m9,12 3,3 8-8"></path>
+            </svg>
+            <p class="no-notifications-title">No notifications</p>
+            <p class="no-notifications-subtitle">All caught up!</p>
+          </div>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="notifications-container">
+        ${this.notifications.map((notification: NotificationEntity) => html`
+          <div class="notification-card">
+            <div class="notification-header">
+              <div class="notification-title-row">
+                ${this._getNotificationIcon(notification.attributes.title)}
+                <h3 class="notification-title">${notification.attributes.title}</h3>
+              </div>
+              <button 
+                class="dismiss-icon-btn"
+                @click="${() => this._dismissNotification(notification.attributes.notification_id)}"
+                aria-label="Dismiss notification"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+            
+            <div class="notification-message" .innerHTML="${this._formatMessage(notification.attributes.message)}">
+            </div>
+            
+            <div class="notification-footer">
+              <span class="notification-time">
+                ${this._getTimeAgo(notification.attributes.created_at)}
+              </span>
+              <button
+                class="dismiss-btn"
+                @click="${() => this._dismissNotification(notification.attributes.notification_id)}"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        `)}
+        
+        ${this.notifications.length > 1 ? html`
+          <div class="dismiss-all-container">
+            <button class="dismiss-all-btn" @click="${this._dismissAll}">
+              Dismiss All
+            </button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+        width: 100%;
+      }
+
+      .notifications-container {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 20px 0;
+      }
+
+      .notification-card {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        padding: 16px;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+      }
+
+      .no-notifications {
+        text-align: center;
+        padding: 24px 16px;
+      }
+
+      .no-notifications-title {
+        color: var(--sidebar-text-color, #fff);
+        margin: 8px 0 4px 0;
+        font-size: 16px;
+        font-weight: 500;
+      }
+
+      .no-notifications-subtitle {
+        color: rgba(255, 255, 255, 0.7);
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .notification-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .notification-title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+      }
+
+      .notification-icon {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+      }
+
+      .notification-icon.error {
+        color: #ef4444;
+      }
+
+      .notification-icon.info {
+        color: #3b82f6;
+      }
+
+      .notification-icon.success {
+        color: #10b981;
+      }
+
+      .notification-icon.warning {
+        color: #f59e0b;
+      }
+
+      .notification-title {
+        color: var(--sidebar-text-color, #fff);
+        margin: 0;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .dismiss-icon-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 8px;
+        transition: background-color 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .dismiss-icon-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .dismiss-icon-btn svg {
+        width: 16px;
+        height: 16px;
+        color: rgba(255, 255, 255, 0.7);
+      }
+
+      .dismiss-icon-btn:hover svg {
+        color: var(--sidebar-text-color, #fff);
+      }
+
+      .notification-message {
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 14px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+      }
+
+      .notification-message .bullet-point {
+        margin-left: 16px;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+
+      .notification-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .notification-time {
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 12px;
+      }
+
+      .dismiss-btn {
+        background: #fbbf24;
+        color: #000;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+      }
+
+      .dismiss-btn:hover {
+        background: #f59e0b;
+      }
+
+      .dismiss-all-container {
+        text-align: center;
+        padding-top: 8px;
+      }
+
+      .dismiss-all-btn {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 14px;
+        cursor: pointer;
+        transition: color 0.2s ease;
+      }
+
+      .dismiss-all-btn:hover {
+        color: var(--sidebar-text-color, #fff);
+      }
+    `;
+  }
+}
+
+customElements.define('notifications-element', NotificationsElement);
 
 const weatherIconUrls = {
   'clear-night': '/local/weather-icons/meteocons/clear-night.svg',
@@ -68,6 +460,7 @@ class SidebarCard extends LitElement {
   weatherFormat = 'temperature_unit';
   bottomCard: any = null;
   CUSTOM_TYPE_PREFIX = 'custom:';
+  notifications = false; // Add this line
 
   /* **************************************** *
    *        Element's public properties       *
@@ -110,6 +503,7 @@ class SidebarCard extends LitElement {
     this.weatherFormat = this.config.weatherFormat ? this.config.weatherFormat : 'temperature_unit';
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
+    this.notifications = this.config.notifications ? this.config.notifications : false;
 
     return html`
       ${addStyle
@@ -188,6 +582,11 @@ class SidebarCard extends LitElement {
                   `;
                 })}
               </ul>
+            `
+          : html``}
+        ${this.notifications
+          ? html`
+              <notifications-element .hass=${this.hass}></notifications-element>
             `
           : html``}
         ${this.bottomCard
@@ -516,21 +915,16 @@ class SidebarCard extends LitElement {
         height: 100%;
         display: flex;
         flex-direction: column;
-        // --face-color: #FFF;
-        // --face-border-color: #FFF;
-        // --clock-hands-color: #000;
-        // --clock-seconds-hand-color: #FF4B3E;
-        // --clock-middle-background: #FFF;
-        // --clock-middle-border: #000;
-        // --sidebar-background: #FFF;
-        // --sidebar-text-color: #000;
-        // --sidebar-icon-color: #000;
-        // --sidebar-selected-text-color: #000;
-        // --sidebar-selected-icon-color: #000;
-        background-color:  var(--sidebar-background, var(--paper-listbox-background-color, var(--primary-background-color, #fff)));
+        --sidebar-background: linear-gradient(180deg, #9333ea 0%, #7e22ce 50%, #6b21a8 100%);
+        --sidebar-text-color: #fff;
+        --sidebar-icon-color: #fff;
+        --sidebar-selected-text-color: #fff;
+        --sidebar-selected-icon-color: #fff;
+        --sidebar-selected-background: rgba(255, 255, 255, 0.2);
+        background: var(--sidebar-background);
       }
       .sidebar-inner {
-        padding: 20px;
+        padding: 30px 24px;
         display: flex;
         flex-direction: column;
         box-sizing: border-box;
@@ -540,61 +934,88 @@ class SidebarCard extends LitElement {
       }
       .sidebarMenu {
         list-style: none;
-        margin: 20px 0;
-        padding: 20px 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.2);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        margin: 30px 0;
+        padding: 0;
+        border-top: none;
+        border-bottom: none;
       }
       .sidebarMenu li {
-        color: var(--sidebar-text-color, #000);
+        color: var(--sidebar-text-color, #fff);
         position: relative;
-        padding: 10px 20px;
+        padding: 16px 20px;
         border-radius: 12px;
-        font-size: 18px;
-        line-height: 24px;
-        font-weight: 300;
+        font-size: 16px;
+        line-height: 20px;
+        font-weight: 400;
         white-space: normal;
-        display: block;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         cursor: pointer;
+        transition: all 0.2s ease;
+        margin-bottom: 4px; /* Reduced from 8px */
+      }
+
+      .sidebarMenu li:hover {
+        background-color: rgba(255, 255, 255, 0.1);
       }
       .sidebarMenu li ha-icon {
-        float: right;
-        color: var(--sidebar-icon-color, #000);
+        color: var(--sidebar-icon-color, #fff);
+        --mdc-icon-size: 20px;
+        margin-left: auto; /* Push icon to far right */
+        flex-shrink: 0;
       }
+        
       .sidebarMenu li.active {
         color: var(--sidebar-selected-text-color);
+        background-color: var(--sidebar-selected-background);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2); /* Added subtle shadow */
+        transform: translateX(4px); /* Slight indent for active items */
       }
+
       .sidebarMenu li.active ha-icon {
-        color: var(--sidebar-selected-icon-color, rgb(247, 217, 89));
+        color: var(--sidebar-selected-icon-color, #fff);
       }
+
+      /* Add some spacing between text and icon */
+      .sidebarMenu li span {
+        flex: 1;
+        margin-right: 12px;
+      }
+
       .sidebarMenu li.active::before {
         content: '';
         position: absolute;
-        top: 0;
         left: 0;
-        width: 100%;
-        height: 100%;
-        background-color: var(--sidebar-selected-icon-color, #000);
-        opacity: 0.12;
-        border-radius: 12px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 4px;
+        height: 60%;
+        background: #fbbf24; /* Golden accent color */
+        border-radius: 0 2px 2px 0;
+        display: block; /* Override the 'display: none' from original */
       }
+
       h1 {
         margin-top: 0;
-        margin-bottom: 20px;
-        font-size: 32px;
-        line-height: 32px;
-        font-weight: 200;
-        color: var(--sidebar-text-color, #000);
+        margin-bottom: 12px;
+        font-size: 48px;
+        line-height: 56px;
+        font-weight: 300;
+        color: var(--sidebar-text-color, #fff);
         cursor: default;
+        letter-spacing: -0.02em;
       }
       h1.digitalClock {
-        font-size: 60px;
-        line-height: 60px;
+        font-size: 56px;
+        line-height: 64px;
+        font-weight: 200;
         cursor: default;
+        letter-spacing: -0.03em;
       }
       h1.digitalClock.with-seconds {
         font-size: 48px;
-        line-height: 48px;
+        line-height: 56px;
         cursor: default;
       }
       h1.digitalClock.with-title {
@@ -602,48 +1023,63 @@ class SidebarCard extends LitElement {
         cursor: default;
       }
       h2 {
-        margin: 0;
-        font-size: 26px;
-        line-height: 26px;
-        font-weight: 200;
-        color: var(--sidebar-text-color, #000);
+        margin: 0 0 24px 0;
+        font-size: 18px;
+        line-height: 24px;
+        font-weight: 300;
+        color: var(--sidebar-text-color, #fff);
         cursor: default;
+        opacity: 0.9;
       }
       .template {
-        margin: 0;
-        padding: 0;
+        margin: 24px 0;
+        padding: 24px;
         list-style: none;
-        color: var(--sidebar-text-color, #000);
+        color: var(--sidebar-text-color, #fff);
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        backdrop-filter: blur(10px);
       }
 
       .template li {
         display: block;
         color: inherit;
-        font-size: 18px;
-        line-height: 24px;
-        font-weight: 300;
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 400;
         white-space: normal;
+        margin-bottom: 12px;
+      }
+
+      .template li:last-child {
+        margin-bottom: 0;
       }
 
       .weather-widget {
         display: flex;
         align-items: center;
-        margin: 15px 0 20px 0;
-        color: var(--sidebar-text-color, #000);
+        margin: 0 0 32px 0;
+        padding: 20px;
+        background: transparent; /* Changed from rgba(255, 255, 255, 0.1) */
+        border-radius: 16px;
+        backdrop-filter: none; /* Removed blur effect */
+        color: var(--sidebar-text-color, #fff);
         cursor: default;
       }
 
       .weather-icon {
-        margin-right: 15px;
-        width: 50px;
+        margin-right: 20px;
+        width: 64px;
+        height: 64px;
         display: flex;
         justify-content: center;
         align-items: center;
-        min-height: 40px; /* Ensure consistent height */
+        background: transparent; /* Changed from rgba(255, 255, 255, 0.15) */
+        border-radius: 12px;
+        padding: 8px;
       }
 
       .meteo-icon {
-        /* Keep existing styles but add: */
         width: 48px;
         height: 48px;
         display: flex;
@@ -656,6 +1092,7 @@ class SidebarCard extends LitElement {
         height: 48px !important;
         object-fit: contain;
         display: block;
+        filter: brightness(0) invert(1);
       }
 
       .weather-info {
@@ -665,50 +1102,29 @@ class SidebarCard extends LitElement {
       }
 
       .weather-temp {
-        font-size: 22px;
+        font-size: 28px;
         font-weight: 300;
-        line-height: 24px;
-        margin-bottom: 2px;
+        line-height: 32px;
+        margin-bottom: 4px;
       }
 
       .weather-desc {
         font-size: 16px;
-        font-weight: 200;
-        opacity: 0.8;
-        line-height: 18px;
+        font-weight: 300;
+        opacity: 0.85;
+        line-height: 20px;
       }
-
-      .meteo-icon.emoji-fallback {
-        font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
-        font-size: 32px;
-      }
-      .wi-day-sunny:before { content: "\\f00d"; }
-      .wi-day-cloudy:before { content: "\\f002"; }
-      .wi-cloudy:before { content: "\\f013"; }
-      .wi-showers:before { content: "\\f009"; }
-      .wi-rain:before { content: "\\f019"; }
-      .wi-storm-showers:before { content: "\\f00e"; }
-      .wi-lightning:before { content: "\\f016"; }
-      .wi-snow:before { content: "\\f01b"; }
-      .wi-sleet:before { content: "\\f0b5"; }
-      .wi-fog:before { content: "\\f014"; }
-      .wi-hail:before { content: "\\f015"; }
-      .wi-night-clear:before { content: "\\f02e"; }
-      .wi-windy:before { content: "\\f021"; }
-      .wi-strong-wind:before { content: "\\f050"; }
-      .wi-alien:before { content: "\\f075"; }
-      .wi-na:before { content: "\\f07b"; }
 
       .clock {
-        margin: 20px 0;
+        margin: 24px auto 32px auto;
         position: relative;
-        padding-top: calc(100% - 10px);
-        width: calc(100% - 10px);
+        padding-top: 60%;
+        width: 60%;
         border-radius: 100%;
-        background: var(--face-color, #fff);
+        background: rgba(255, 255, 255, 0.95);
         font-family: 'Montserrat';
-        border: 5px solid var(--face-border-color, #fff);
-        box-shadow: inset 2px 3px 8px 0 rgba(0, 0, 0, 0.1);
+        border: 4px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2), inset 0 2px 8px rgba(0, 0, 0, 0.1);
       }
 
       .clock .wrap {
@@ -725,26 +1141,27 @@ class SidebarCard extends LitElement {
       .clock .hour {
         position: absolute;
         height: 28%;
-        width: 6px;
+        width: 4px;
         margin: auto;
         top: -27%;
         left: 0;
         bottom: 0;
         right: 0;
-        background: var(--clock-hands-color, #000);
+        background: #6b21a8;
         transform-origin: bottom center;
         transform: rotate(0deg);
-        box-shadow: 0 0 10px 0 rgba(0, 0, 0, 0.4);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         z-index: 1;
+        border-radius: 2px;
       }
 
       .clock .minute {
         position: absolute;
         height: 41%;
-        width: 4px;
+        width: 3px;
         top: -38%;
         left: 0;
-        box-shadow: 0 0 10px 0 rgba(0, 0, 0, 0.4);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         transform: rotate(90deg);
       }
 
@@ -757,8 +1174,8 @@ class SidebarCard extends LitElement {
         left: 0;
         bottom: 0;
         right: 0;
-        border-radius: 4px;
-        background: var(--clock-seconds-hand-color, #ff4b3e);
+        border-radius: 2px;
+        background: #ec4899;
         transform-origin: bottom center;
         transform: rotate(180deg);
         z-index: 1;
@@ -770,19 +1187,42 @@ class SidebarCard extends LitElement {
         left: 0;
         right: 0;
         bottom: 0;
-        width: 12px;
-        height: 12px;
+        width: 10px;
+        height: 10px;
         border-radius: 100px;
-        background: var(--clock-middle-background, #fff);
-        border: 2px solid var(--clock-middle-border, #000);
-        border-radius: 100px;
+        background: #7e22ce;
+        border: 2px solid #fff;
         margin: auto;
-        z-index: 1;
+        z-index: 2;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
       }
 
       .bottom {
         display: flex;
         margin-top: auto;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        backdrop-filter: blur(10px);
+      }
+
+      /* Scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 3px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 3px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.4);
       }
     `;
   }
