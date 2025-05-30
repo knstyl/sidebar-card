@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.7.3';
+const SIDEBAR_CARD_VERSION = '0.1.9.7.7';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -29,13 +29,7 @@ import { forwardHaptic, navigate, toggleEntity } from 'custom-card-helpers';
 interface HassEntity {
   entity_id: string;
   state: string;
-  attributes: {
-    [key: string]: any;
-    title?: string;
-    message?: string;
-    notification_id?: string;
-    created_at?: string;
-  };
+  attributes: any;
 }
 
 interface HassStates {
@@ -48,14 +42,11 @@ interface Hass {
   language?: string;
 }
 
-interface NotificationEntity extends HassEntity {
-  attributes: {
-    title: string;
-    message: string;
-    notification_id: string;
-    created_at: string;
-    [key: string]: any;
-  };
+interface NotificationEntity {
+  title: string;
+  message: string;
+  id: string;
+  created_at: string;
 }
 
 class NotificationsElement extends LitElement {
@@ -87,19 +78,18 @@ class NotificationsElement extends LitElement {
   private _updateNotifications(): void {
     if (!this.hass || !this.hass.states) return;
     
-    console.info(`hassStates=${JSON.stringify(Object.values(this.hass.states))}`)
     const filteredNotifications = Object.values(this.hass.states)
       .filter((entity: any) => 
-        entity.entity_id.startsWith('persistent_notification.') &&
-        entity.attributes.title !== undefined &&
-        entity.attributes.message !== undefined &&
-        entity.attributes.notification_id !== undefined &&
-        entity.attributes.created_at !== undefined
-      );
+        entity.entity_id.startsWith('sensor.template_persistent_notifications_overview') &&
+        entity.attributes.notifications !== undefined)
+      .map((entity: any) => entity.attributes.notifications);
     
-    this.notifications = filteredNotifications as NotificationEntity[];
-    this.notifications.sort((a, b) => new Date(b.attributes.created_at).getTime() - new Date(a.attributes.created_at).getTime());
-    
+    if (filteredNotifications) {
+      this.notifications = filteredNotifications[0] as NotificationEntity[];
+      this.notifications.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    } else {
+      this.notifications = []
+    }
     this.requestUpdate();
   }
 
@@ -181,24 +171,13 @@ class NotificationsElement extends LitElement {
     if (!this.hass || !this.notifications.length) return;
     
     this.notifications.forEach((notification: NotificationEntity) => {
-      this._dismissNotification(notification.attributes.notification_id);
+      this._dismissNotification(notification.id);
     });
   }
 
   protected render() {
     if (!this.notifications || this.notifications.length === 0) {
-      return html`
-        <div class="notifications-container">
-          <div class="notification-card no-notifications">
-            <svg class="notification-icon success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <path d="m9,12 3,3 8-8"></path>
-            </svg>
-            <p class="no-notifications-title">No notifications</p>
-            <p class="no-notifications-subtitle">All caught up!</p>
-          </div>
-        </div>
-      `;
+      return ``;
     }
 
     return html`
@@ -207,12 +186,12 @@ class NotificationsElement extends LitElement {
           <div class="notification-card">
             <div class="notification-header">
               <div class="notification-title-row">
-                ${this._getNotificationIcon(notification.attributes.title)}
-                <h3 class="notification-title">${notification.attributes.title}</h3>
+                ${this._getNotificationIcon(notification.title)}
+                <h3 class="notification-title">${notification.title}</h3>
               </div>
               <button 
                 class="dismiss-icon-btn"
-                @click="${() => this._dismissNotification(notification.attributes.notification_id)}"
+                @click="${() => this._dismissNotification(notification.id)}"
                 aria-label="Dismiss notification"
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -222,16 +201,16 @@ class NotificationsElement extends LitElement {
               </button>
             </div>
             
-            <div class="notification-message" .innerHTML="${this._formatMessage(notification.attributes.message)}">
+            <div class="notification-message" .innerHTML="${this._formatMessage(notification.message)}">
             </div>
             
             <div class="notification-footer">
               <span class="notification-time">
-                ${this._getTimeAgo(notification.attributes.created_at)}
+                ${this._getTimeAgo(notification.created_at)}
               </span>
               <button
                 class="dismiss-btn"
-                @click="${() => this._dismissNotification(notification.attributes.notification_id)}"
+                @click="${() => this._dismissNotification(notification.id)}"
               >
                 Dismiss
               </button>
@@ -516,7 +495,6 @@ class SidebarCard extends LitElement {
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
     this.notifications = this.config.notifications ? this.config.notifications : false;
-    console.log(`sideBarMenu=${JSON.stringify(sidebarMenu)}`)
 
     return html`
       ${addStyle
@@ -847,7 +825,6 @@ class SidebarCard extends LitElement {
       this.shadowRoot.querySelectorAll('ul.sidebarMenu li[data-type="navigate"]').forEach((menuItem) => {
         menuItem.classList.remove('active');
       });
-      console.info(`pathName=${document.location.pathname}`)
       let activeEl = this.shadowRoot.querySelector('ul.sidebarMenu li[data-path="' + document.location.pathname + '"]');
       if (activeEl) {
         activeEl.classList.add('active');
@@ -929,16 +906,18 @@ class SidebarCard extends LitElement {
         height: 100%;
         display: flex;
         flex-direction: column;
-        /* Updated to match your dashboard's dark theme */
-        --sidebar-background: #1a1a1a;
-        --sidebar-text-color: #e1e5e9;
-        --sidebar-icon-color: #9ca3af;
-        --sidebar-selected-text-color: #ffffff;
-        --sidebar-selected-icon-color: #60a5fa;
-        --sidebar-selected-background: rgba(96, 165, 250, 0.15);
-        --sidebar-card-background: rgba(255, 255, 255, 0.05);
-        --sidebar-border-color: rgba(255, 255, 255, 0.08);
-        background: var(--sidebar-background);
+        // --face-color: #FFF;
+        // --face-border-color: #FFF;
+        // --clock-hands-color: #000;
+        // --clock-seconds-hand-color: #FF4B3E;
+        // --clock-middle-background: #FFF;
+        // --clock-middle-border: #000;
+        // --sidebar-background: #FFF;
+        // --sidebar-text-color: #000;
+        // --sidebar-icon-color: #000;
+        // --sidebar-selected-text-color: #000;
+        // --sidebar-selected-icon-color: #000;
+        background-color:  var(--sidebar-background, var(--paper-listbox-background-color, var(--primary-background-color, #fff)));
       }
 
       .sidebar-inner {
@@ -953,7 +932,6 @@ class SidebarCard extends LitElement {
 
       .sidebarMenu {
         list-style: none;
-        margin: 24px 0;
         padding: 0;
         border-top: none;
         border-bottom: none;
@@ -1028,7 +1006,7 @@ class SidebarCard extends LitElement {
 
       /* Header Styles */
       h1 {
-        margin-top: 0;
+        margin-top: 15px;
         margin-bottom: 16px;
         font-size: 42px;
         line-height: 48px;
@@ -1039,12 +1017,13 @@ class SidebarCard extends LitElement {
       }
 
       h1.digitalClock {
-        font-size: 48px;
+        font-size: 72px;
         line-height: 56px;
         font-weight: 200;
         cursor: default;
         letter-spacing: -0.03em;
         color: #ffffff;
+        text-align: center;
       }
 
       h1.digitalClock.with-seconds {
@@ -1066,6 +1045,12 @@ class SidebarCard extends LitElement {
         color: var(--sidebar-text-color);
         cursor: default;
         opacity: 0.8;
+      }
+
+      h2.date {
+        font-size: 24px;
+        text-align: center;
+        line-height: 32px;
       }
 
       /* Template Section */
