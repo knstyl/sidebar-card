@@ -84,6 +84,7 @@ class NotificationsElement extends LitElement {
         entity.attributes.notifications !== undefined)
       .map((entity: any) => entity.attributes.notifications);
     
+    console.log(`filteredNotifications=${filteredNotifications}`)
     if (filteredNotifications) {
       this.notifications = filteredNotifications[0] as NotificationEntity[];
       this.notifications.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -450,6 +451,7 @@ class SidebarCard extends LitElement {
   weatherEntity = '';
   weatherFormat = 'temperature_unit';
   bottomCard: any = null;
+  widgetCard: any = null;
   CUSTOM_TYPE_PREFIX = 'custom:';
   notifications = false; // Add this line
 
@@ -473,6 +475,93 @@ class SidebarCard extends LitElement {
     super();
   }
 
+
+  /* **************************************** *
+   *              Card Helpers                *
+   * **************************************** */
+
+  async createCard(cardConfig, containerSelector, styleConfig) {
+    if (!cardConfig || typeof cardConfig !== 'object' || !cardConfig.type) {
+      error2console('createCard', 'Invalid card config!');
+      return null;
+    }
+  
+    let tag = cardConfig.type;
+    if (tag.startsWith(this.CUSTOM_TYPE_PREFIX)) {
+      tag = tag.substr(this.CUSTOM_TYPE_PREFIX.length);
+    } else {
+      tag = `hui-${tag}-card`;
+    }
+  
+    console.info(`Creating card with tag: ${tag}`);
+  
+    // Method 2: Create element and verify it has required methods
+    const cardElement = document.createElement(tag);
+    
+    // Wait a bit for the element to fully initialize
+    await new Promise(resolve => setTimeout(resolve, 150));
+    
+    if (!cardElement) {
+      error2console('createCard', `Failed to create element: ${tag}`);
+      return null;
+    }
+  
+    // Check if it's a proper Home Assistant card
+    if (typeof cardElement.setConfig !== 'function') {
+      // Try to wait a bit more and check again
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      if (typeof cardElement.setConfig !== 'function') {
+        console.error(`Element ${tag} is not a valid Home Assistant card (no setConfig method)`);
+        return null;
+      }
+    }
+    try {
+      // Configure the card
+      cardElement.setConfig(cardConfig);
+      cardElement.hass = hass();
+  
+      // Append to container
+      const container = this.shadowRoot.querySelector(containerSelector);
+      if (container) {
+        container.appendChild(cardElement);
+        provideHass(cardElement);
+  
+        // Apply custom styles if provided
+        if (styleConfig && styleConfig.cardStyle) {
+          this.applyCardStyles(cardElement, styleConfig.cardStyle);
+        }
+  
+        console.info(`Successfully created and configured card: ${tag}`);
+        return cardElement;
+      } else {
+        error2console('createCard', `Container ${containerSelector} not found`);
+        return null;
+      }
+    } catch (error) {
+      error2console('createCard', `Error configuring card ${tag}:`, error);
+      return null;
+    }
+  }
+  
+  applyCardStyles(cardElement, styleString) {
+    let iterations = 0;
+    const maxIterations = 20; // Increased max iterations
+    
+    const interval = setInterval(() => {
+      if (cardElement && cardElement.shadowRoot) {
+        clearInterval(interval);
+        const styleElement = document.createElement('style');
+        styleElement.innerHTML = styleString;
+        cardElement.shadowRoot.appendChild(styleElement);
+        console.info('Card styles applied successfully');
+      } else if (++iterations >= maxIterations) {
+        clearInterval(interval);
+        console.warn('Failed to apply card styles - shadowRoot not available');
+      }
+    }, 100);
+  }
+
   /* **************************************** *
    *   Element's HTML renderer (lit-element)  *
    * **************************************** */
@@ -492,6 +581,7 @@ class SidebarCard extends LitElement {
     this.weather = this.config.weather ? this.config.weather : false;
     this.weatherEntity = this.config.weatherEntity ? this.config.weatherEntity : '';
     this.weatherFormat = this.config.weatherFormat ? this.config.weatherFormat : 'temperature_unit';
+    this.widgetCard = this.config.widgetCard ? this.config.widgetCard : null;
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
     this.notifications = this.config.notifications ? this.config.notifications : false;
@@ -562,6 +652,11 @@ class SidebarCard extends LitElement {
                   `;
                 })}
               </ul>
+            `
+          : html``}
+        ${this.widgetCard
+          ? html`
+              <div class="widget-card"></div>
             `
           : html``}
         ${this.config.template
@@ -779,44 +874,18 @@ class SidebarCard extends LitElement {
       true
     );
 
+    if (this.widgetCard) {
+      setTimeout(async () => {
+        const card = Object.assign({ type: this.widgetCard.type }, this.widgetCard.cardOptions);
+        await this.createCard(card, '.widget-card', this.widgetCard);
+      }, 100);
+    }
+
     if (this.bottomCard) {
-      setTimeout(() => {
-        var card = {
-          type: this.bottomCard.type,
-        };
-        card = Object.assign({}, card, this.bottomCard.cardOptions);
-        log2console('firstUpdated', 'Bottom card: ', card);
-        if (!card || typeof card !== 'object' || !card.type) {
-          error2console('firstUpdated', 'Bottom card config error!');
-        } else {
-          let tag = card.type;
-          if (tag.startsWith(this.CUSTOM_TYPE_PREFIX)) tag = tag.substr(this.CUSTOM_TYPE_PREFIX.length);
-          else tag = `hui-${tag}-card`;
-
-          const cardElement = document.createElement(tag);
-          cardElement.setConfig(card);
-          cardElement.hass = hass();
-
-          var bottomSection = this.shadowRoot.querySelector('.bottom');
-          bottomSection.appendChild(cardElement);
-          provideHass(cardElement);
-
-          if (this.bottomCard.cardStyle && this.bottomCard.cardStyle != '') {
-            let style = this.bottomCard.cardStyle;
-            let itterations = 0;
-            let interval = setInterval(function() {
-              if (cardElement && cardElement.shadowRoot) {
-                window.clearInterval(interval);
-                var styleElement = document.createElement('style');
-                styleElement.innerHTML = style;
-                cardElement.shadowRoot.appendChild(styleElement);
-              } else if (++itterations === 10) {
-                window.clearInterval(interval);
-              }
-            }, 100);
-          }
-        }
-      }, 2);
+      setTimeout(async () => {
+        const card = Object.assign({ type: this.bottomCard.type }, this.bottomCard.cardOptions);
+        await this.createCard(card, '.bottom', this.bottomCard);
+      }, 100);
     }
   }
 
@@ -1404,11 +1473,22 @@ class SidebarCard extends LitElement {
         color: var(--sidebar-text-color);
       }
 
+
+      /* Widget Card */
+      .widget-card {
+        display: flex;
+        padding: 15px;
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+      }
+
       /* Bottom Card */
       .bottom {
         display: flex;
         margin-top: auto;
-        padding: 20px;
+        padding: 15px;
         background: var(--sidebar-card-background);
         border: 1px solid var(--sidebar-border-color);
         border-radius: 12px;
