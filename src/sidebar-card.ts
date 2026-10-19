@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.6.2';
+const SIDEBAR_CARD_VERSION = '0.1.9.8.0';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -50,6 +50,15 @@ class SidebarCard extends LitElement {
   bottomCard: any = null;
   CUSTOM_TYPE_PREFIX = 'custom:';
 
+  // Markus:
+  // Stores the setInterval handle for the periodic clock update
+  // Stores the setInterval handle for the periodic date update
+  // Stores the bound event handler function for the 'location-changed' event, used to update the active menu item with the correct `this` context
+  _clockInterval: any = null;
+  _dateInterval: any = null;
+  _weatherInterval: any = null;
+  _boundLocationChange: any;
+
   /* **************************************** *
    *        Element's public properties       *
    * **************************************** */
@@ -66,9 +75,50 @@ class SidebarCard extends LitElement {
    *           Element constructor            *
    * **************************************** */
 
+  //Markus:
+  // Binds the location change handler to update the active menu item with a short delay
   constructor() {
     super();
-  }
+    this._boundLocationChange = () => {
+        setTimeout(() => this._updateActiveMenu(), 50);
+    };
+  }  
+  
+  connectedCallback() {
+      super.connectedCallback();
+      // Starts the observer for URL changes
+      window.addEventListener('location-changed', this._boundLocationChange);
+      
+      const self = this;
+
+      // Start timers if they are configured and not already running.
+      if ((this.config.clock || this.config.digitalClock) && !this._clockInterval) {
+        const inc = 1000;
+        // Delay the first run slightly to ensure the DOM is ready.
+        setTimeout(() => self._runClock(), 50);
+        this._clockInterval = setInterval(function() {
+          self._runClock();
+        }, inc);
+      }
+      if (this.config.date && !this._dateInterval) {
+        const inc = 1000 * 60 * 60;
+        // Delay the first run slightly to ensure the DOM is ready.
+        setTimeout(() => self._runDate(), 50);
+        this._dateInterval = setInterval(function() {
+          self._runDate();
+        }, inc);
+      }
+      if (this.config.weather && !this._weatherInterval) {
+        const inc = 1000 * 60 * 5; // Update every 5 minutes
+        // Delay the first run slightly to ensure the DOM is ready.
+        setTimeout(() => self._runWeather(), 50);
+        this._weatherInterval = setInterval(function() {
+          self._runWeather();
+        }, inc);
+      }
+
+      this._updateActiveMenu();
+    }
 
   /* **************************************** *
    *   Element's HTML renderer (lit-element)  *
@@ -145,18 +195,19 @@ class SidebarCard extends LitElement {
         ${sidebarMenu && sidebarMenu.length > 0
           ? html`
               <ul class="sidebarMenu">
-                ${sidebarMenu.map((sidebarMenuItem) => {
+                ${(sidebarMenu || []).filter(item => this._evaluateVisibleCondition(item.conditional, this.hass)).map((sidebarMenuItem) => {
                   return html`
                     <li @click="${(e) => this._menuAction(e)}" class="${sidebarMenuItem.state && this.hass.states[sidebarMenuItem.state].state != 'off' && this.hass.states[sidebarMenuItem.state].state != 'unavailable' ? 'active' : ''}" data-type="${sidebarMenuItem.action}" data-path="${sidebarMenuItem.navigation_path ? sidebarMenuItem.navigation_path : ''}" data-menuitem="${JSON.stringify(sidebarMenuItem)}">
                       <span>${sidebarMenuItem.name}</span>
                       ${sidebarMenuItem.icon
-                        ? html`
+                          ? html`
                             <ha-icon @click="${(e) => this._menuAction(e)}" icon="${sidebarMenuItem.icon}"></ha-icon>
                           `
-                        : html``}
+                          : html``}
                     </li>
                   `;
                 })}
+
               </ul>
             `
           : html``}
@@ -343,39 +394,38 @@ class SidebarCard extends LitElement {
   firstUpdated() {
     provideHass(this);
     let root = getRoot();
-    root.shadowRoot.querySelectorAll('paper-tab').forEach((paperTab) => {
-      log2console('firstUpdated', 'Menu item found');
-      paperTab.addEventListener('click', () => {
-        this._updateActiveMenu();
-      });
-    });
+
+    // The clock and date interval logic is now moved to connectedCallback()
+    // to handle reloads correctly. This section can be removed.
+    /*
     const self = this;
     if (this.clock || this.digitalClock) {
       const inc = 1000;
       self._runClock();
-      setInterval(function() {
+      this._clockInterval = setInterval(function() {
         self._runClock();
       }, inc);
     }
     if (this.date) {
       const inc = 1000 * 60 * 60;
       self._runDate();
-      setInterval(function() {
+      this._dateInterval = setInterval(function() {
         self._runDate();
       }, inc);
     }
-    if (this.weather) {
-      const inc = 1000 * 60 * 5; // Update every 5 minutes
-      self._runWeather();
-      setInterval(function() {
-        self._runWeather();
-      }, inc);
-    }
+    */
+
+    const self = this; // self is needed for the setTimeouts below
 
     setTimeout(() => {
       self.updateSidebarSize(root);
       self._updateActiveMenu();
-    }, 1);
+    }, 50); 
+
+    setTimeout(() => {
+      self.updateSidebarSize(root);
+    }, 350);
+
     window.addEventListener(
       'resize',
       function() {
@@ -443,7 +493,70 @@ class SidebarCard extends LitElement {
     if ((e.target.dataset && e.target.dataset.menuitem) || (e.target.parentNode.dataset && e.target.parentNode.dataset.menuitem)) {
       const menuItem = JSON.parse(e.target.dataset.menuitem || e.target.parentNode.dataset.menuitem);
       this._customAction(menuItem);
-      this._updateActiveMenu();
+      // Markus:
+      // This line is commented out because the menu update is now triggered by the 'location-changed' event
+      //this._updateActiveMenu();
+    }
+  }
+
+  _evaluateVisibleCondition(template: string | undefined, hass: any): boolean {
+    if (!template) return true;
+
+    // Clean outer braces and whitespace
+    const cleaned = template.trim().replace(/^{{\s*|\s*}}$/g, "").trim();
+
+    try {
+      // --- is_state('entity', 'value') ---
+      const matchState = cleaned.match(/is_state\(['"]([^'"]+)['"],\s*['"]([^'"]+)['"]\)/);
+      if (matchState) {
+        const [_, entityId, expected] = matchState;
+        return hass.states[entityId]?.state === expected;
+      }
+
+      // --- is_state_attr('entity', 'attr', 'value') ---
+      const matchAttr = cleaned.match(
+          /is_state_attr\(['"]([^'"]+)['"],\s*['"]([^'"]+)['"],\s*['"]([^'"]+)['"]\)/
+      );
+      if (matchAttr) {
+        const [_, entityId, attr, expected] = matchAttr;
+        return hass.states[entityId]?.attributes?.[attr] === expected;
+      }
+
+      // --- states['entity_id'] == 'value' ---
+      const matchEquals = cleaned.match(/states\[['"]([^'"]+)['"]\]\s*==\s*['"]([^'"]+)['"]/);
+      if (matchEquals) {
+        const [_, entityId, expected] = matchEquals;
+        return hass.states[entityId]?.state === expected;
+      }
+
+      // ---  Handle simple comparisons, e.g. "states['sensor.temp'] | int > 20"
+      //      Support "| int", "| float" filters and numeric comparisons.
+      const numericMatch = cleaned.match(
+          /states\[['"]([^'"]+)['"]\]\s*\|\s*(int|float)\s*([<>]=?|==)\s*([\d.]+)/
+      );
+      if (numericMatch) {
+        const [_, entityId, type, operator, thresholdStr] = numericMatch;
+        const raw = hass.states[entityId]?.state;
+        if (raw === undefined) return false;
+        const num = type === "float" ? parseFloat(raw) : parseInt(raw, 10);
+        const threshold = parseFloat(thresholdStr);
+
+        switch (operator) {
+          case ">": return num > threshold;
+          case "<": return num < threshold;
+          case ">=": return num >= threshold;
+          case "<=": return num <= threshold;
+          case "==": return num == threshold;
+          default: return false;
+        }
+      }
+
+      // Fallback: if expression doesn’t match known patterns, log a warning
+      console.warn("sidebar-card: could not parse visible template:", cleaned);
+      return true;
+    } catch (err) {
+      console.error("sidebar-card: visible template evaluation error:", err);
+      return true; // fail open
     }
   }
 
@@ -478,7 +591,24 @@ class SidebarCard extends LitElement {
         const [domain, service] = tapAction.service.split('.', 2);
         this.hass.callService(domain, service, tapAction.service_data);
         forwardHaptic('success');
+        break;
       }
+      case 'service-js':
+        if (tapAction.service) {
+          try {
+            const code = tapAction.service
+            .toString()
+            .replace(/^\[\[\[\s*|\s*\]\]\]$/g, '');
+            const func = new Function(code);
+            func.call(this);
+            forwardHaptic('success');;
+          } catch (err) {
+            forwardHaptic('failure');
+          }
+        } else {
+          error2console('service-js', 'no service code found');
+        }
+        break;
     }
   }
 
@@ -1007,7 +1137,10 @@ function getRoot() {
 function getHeaderHeightPx() {
 	let headerHeightPx = '0px';
 	const root = getRoot();
-    const view = root.shadowRoot.getElementById('view');
+  if (!root || !root.shadowRoot) {
+    return headerHeightPx;   // Fallback for Safari LOG entry: (evaluating 'root.shadowRoot')
+  }
+  const view = root.shadowRoot.getElementById('view');
 	//debugger;
 	if(view!==undefined && window.getComputedStyle(view)!==undefined) {
 		headerHeightPx = window.getComputedStyle(view).paddingTop;
@@ -1186,6 +1319,9 @@ function createElementFromHTML(htmlString: string) {
   return div.firstChild;
 }
 
+
+
+
 // ##########################################################################################
 // ###   The Sidebar Card code base initialisation
 // ##########################################################################################
@@ -1200,13 +1336,22 @@ async function buildSidebar() {
       const appDrawerLayout = getAppDrawerLayout();
       const appDrawer = getAppDrawer();
       const offParam = getParameterByName('sidebarOff');
+    
+      // SAFETY CHECK: Only continue if root and shadowRoot are valid
+      if (!root || !root.shadowRoot) {
+        // Prevents crash if Home Assistant UI root or its shadowRoot is not ready
+        error2console('buildSidebar', 'Root element or shadowRoot not found!');
+        return;
+      }
 
+      // Now safe to access shadowRoot
       if (sidebarConfig.hideTopMenu && sidebarConfig.hideTopMenu === true && offParam == null) {
         if (root.shadowRoot.querySelector('ch-header')) root.shadowRoot.querySelector('ch-header').style.display = 'none';
         if (root.shadowRoot.querySelector('app-header')) root.shadowRoot.querySelector('app-header').style.display = 'none';
         if (root.shadowRoot.querySelector('ch-footer')) root.shadowRoot.querySelector('ch-footer').style.display = 'none';
         if (root.shadowRoot.getElementById('view')) root.shadowRoot.getElementById('view').style.minHeight = 'calc(100vh)';
       }
+
       if (sidebarConfig.hideHassSidebar && sidebarConfig.hideHassSidebar === true && offParam == null) {
         if (hassSidebar) {
           hassSidebar.style.display = 'none';
