@@ -17,39 +17,35 @@ const serveopts = {
   headers: {
     'Access-Control-Allow-Origin': '*',
   },
-  sourcemap: false
 };
 
 const plugins = [
-  nodeResolve({sourcemap: false}),
-  commonjs({sourcemap: false}),
+  nodeResolve(),
+  commonjs(),
   typescript({
-    sourcemap: false,
     typescript: require('typescript'),
-    objectHashIgnoreUnknownHack: true
+    objectHashIgnoreUnknownHack: true,
+    tsconfigOverride: { compilerOptions: { sourceMap: false } },
   }),
-  json({sourcemap: false}),
+  json(),
   babel({
     exclude: 'node_modules/**',
-    sourcemap: false
   }),
   dev && serve(serveopts),
   !dev && terser(),
   url({
     include: ['**/*.svg'],
     limit: 0,
-    fileName: '[name][extname]'
-  })
-];
+    fileName: '[name][extname]',
+  }),
+].filter(Boolean);
 
-export default [
-  {
-    input: 'src/sidebar-card.ts',
-    output: {
-      dir: 'dist',
-      format: 'es',
-      sourcemap: false
-    },
-    plugins: [...plugins],
+export default {
+  input: 'src/sidebar-card.ts',
+  output: {
+    dir: 'dist',
+    format: 'es',
+    sourcemap: false,
   },
-];
+  plugins,
+};
