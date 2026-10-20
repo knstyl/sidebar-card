@@ -467,7 +467,7 @@ class NotificationsElement extends LitElement {
       }
 
       .ns {
-        margin: 20px 0;
+        margin: 0;
       }
 
       .ns-list {
@@ -859,6 +859,15 @@ interface GlanceBadge {
   label_max_length?: number;
 }
 
+type GlanceTone = 'alert' | 'warning' | 'info';
+
+interface GlanceToneThresholds {
+  warn_above?: number;
+  alert_above?: number;
+  warn_below?: number;
+  alert_below?: number;
+}
+
 interface GlanceItem {
   entity: string;
   icon: string;
@@ -866,16 +875,49 @@ interface GlanceItem {
   color?: string;
   show?: GlanceCondition | GlanceConditionType;
   badge?: GlanceBadge;
+  // alerts mode: text for the row; supports {name}, {state} and {unit}
+  label?: string;
+  // alerts mode: fixed tone, or thresholds on the entity's numeric state
+  tone?: GlanceTone | GlanceToneThresholds;
   tap_action?: { action: string; entity?: string; navigation_path?: string; url_path?: string };
+}
+
+type GlancePosition = 'bottom' | 'attention';
+
+interface GlanceBarConfig {
+  position?: GlancePosition;
+  items?: GlanceItem[];
+}
+
+const GLANCE_TONE_RANK: { [key in GlanceTone]: number } = { alert: 0, warning: 1, info: 2 };
+// alerts beyond this fold into a "+N more" row
+const GLANCE_ALERTS_VISIBLE = 2;
+
+// `glanceBar` accepts the original list form (icon bar pinned to the bottom)
+// or { position, items }.
+function normalizeGlanceBar(config: GlanceItem[] | GlanceBarConfig | null | undefined): { position: GlancePosition; items: GlanceItem[] } {
+  if (!config) return { position: 'bottom', items: [] };
+  if (Array.isArray(config)) return { position: 'bottom', items: config };
+  return {
+    position: config.position === 'attention' ? 'attention' : 'bottom',
+    items: Array.isArray(config.items) ? config.items : []
+  };
 }
 
 class GlanceBarElement extends LitElement {
   hass: any;
   items: GlanceItem[] = [];
+  mode: 'icons' | 'alerts' = 'icons';
+  private _expanded = false;
   private _tickInterval: any = null;
 
   static get properties() {
-    return { hass: { type: Object }, items: { type: Array } };
+    return {
+      hass: { type: Object },
+      items: { type: Array },
+      mode: { type: String, reflect: true },
+      _expanded: { attribute: false }
+    };
   }
 
   connectedCallback() {
@@ -982,6 +1024,72 @@ class GlanceBarElement extends LitElement {
     }
   }
 
+  private _tone(item: GlanceItem): GlanceTone {
+    const tone = item.tone;
+    if (!tone) return 'alert';
+    if (typeof tone === 'string') return GLANCE_TONE_RANK[tone] !== undefined ? tone : 'alert';
+    const value = parseFloat(this.hass?.states?.[item.entity]?.state);
+    if (isNaN(value)) return 'info';
+    if ((tone.alert_above !== undefined && value > tone.alert_above) ||
+        (tone.alert_below !== undefined && value < tone.alert_below)) return 'alert';
+    if ((tone.warn_above !== undefined && value > tone.warn_above) ||
+        (tone.warn_below !== undefined && value < tone.warn_below)) return 'warning';
+    return 'info';
+  }
+
+  private _alertLabel(item: GlanceItem): string {
+    const entityState = this.hass.states[item.entity];
+    const name = item.name || entityState?.attributes?.friendly_name || item.entity;
+    if (!item.label) return name;
+    return item.label
+      .replace(/\{name\}/g, name)
+      .replace(/\{state\}/g, entityState?.state ?? '')
+      .replace(/\{unit\}/g, entityState?.attributes?.unit_of_measurement ?? '')
+      .trim();
+  }
+
+  // "how long has the door been open"
+  private _since(lastChanged: string | undefined): string {
+    if (!lastChanged) return '';
+    const mins = Math.floor((Date.now() - new Date(lastChanged).getTime()) / 60000);
+    if (isNaN(mins) || mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+  }
+
+  private _renderAlerts(visible: GlanceItem[]) {
+    const sorted = visible
+      .map((item, index) => ({ item, index, tone: this._tone(item) }))
+      .sort((a, b) => GLANCE_TONE_RANK[a.tone] - GLANCE_TONE_RANK[b.tone] || a.index - b.index);
+    const shown = this._expanded ? sorted : sorted.slice(0, GLANCE_ALERTS_VISIBLE);
+    const hidden = sorted.length - shown.length;
+
+    return html`
+      <div class="alerts" role="list">
+        ${shown.map(({ item, tone }) => {
+          const entityState = this.hass.states[item.entity];
+          const label = this._alertLabel(item);
+          return html`
+            <button class="alert ${tone}" role="listitem" title="${label}"
+              @click="${(e) => this._handleClick(e, item)}">
+              <ha-icon icon="${item.icon}"></ha-icon>
+              <span class="alert-label">${label}</span>
+              <span class="alert-since">${this._since(entityState?.last_changed)}</span>
+            </button>
+          `;
+        })}
+        ${hidden > 0 || this._expanded && sorted.length > GLANCE_ALERTS_VISIBLE
+          ? html`
+              <button class="alert-more" @click="${() => { this._expanded = !this._expanded; }}">
+                ${this._expanded ? 'Show less' : `+${hidden} more alert${hidden === 1 ? '' : 's'}`}
+              </button>
+            `
+          : ''}
+      </div>
+    `;
+  }
+
   protected render() {
     if (!this.hass || !this.items?.length) return html``;
 
@@ -991,6 +1099,8 @@ class GlanceBarElement extends LitElement {
     );
 
     if (!visible.length) return html``;
+
+    if (this.mode === 'alerts') return this._renderAlerts(visible);
 
     return html`
       <div class="glance-bar">
@@ -1118,11 +1228,270 @@ class GlanceBarElement extends LitElement {
         white-space: nowrap;
         letter-spacing: -0.02em;
       }
+
+      /* ---------- alerts mode: slim rows in the Attention zone ---------- */
+      :host([mode='alerts']) {
+        position: static;
+        margin-top: 0;
+      }
+
+      :host([mode='alerts'])::before {
+        display: none;
+      }
+
+      .alerts {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .alert {
+        --sev: #ef4444;
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 44px;
+        padding: 0 12px 0 14px;
+        box-sizing: border-box;
+        overflow: hidden;
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+        color: var(--sidebar-text-color, #f1f5f9);
+        background: linear-gradient(
+            color-mix(in srgb, var(--sev) 14%, transparent),
+            color-mix(in srgb, var(--sev) 14%, transparent)
+          ),
+          var(--sidebar-notification-background, #18263f);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+      }
+
+      .alert::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: var(--sev);
+      }
+
+      .alert.warning {
+        --sev: #f59e0b;
+      }
+
+      .alert.info {
+        --sev: #3b82f6;
+      }
+
+      .alert:active {
+        filter: brightness(1.15);
+      }
+
+      .alert ha-icon {
+        --mdc-icon-size: 20px;
+        color: var(--sev);
+        flex-shrink: 0;
+        display: flex;
+      }
+
+      .alert-label {
+        flex: 1;
+        min-width: 0;
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .alert-since {
+        font-size: 12px;
+        color: rgba(241, 245, 249, 0.5);
+        flex-shrink: 0;
+      }
+
+      .alert-more {
+        align-self: flex-start;
+        min-height: 32px;
+        padding: 0 8px;
+        background: none;
+        border: none;
+        border-radius: 8px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(241, 245, 249, 0.72);
+        cursor: pointer;
+      }
+
+      .alert-more:active {
+        background: rgba(255, 255, 255, 0.08);
+      }
     `;
   }
 }
 
 customElements.define('glance-bar-element', GlanceBarElement);
+
+// ##########################################################################################
+// ###   Presence - avatars for person entities, shown on the weather row
+// ##########################################################################################
+
+interface PresenceEntry {
+  entity: string;
+  name?: string;
+}
+
+class PresenceElement extends LitElement {
+  hass: any;
+  entities: (string | PresenceEntry)[] = [];
+  compact = false;
+
+  static get properties() {
+    return { hass: { type: Object }, entities: { type: Array }, compact: { type: Boolean, reflect: true } };
+  }
+
+  private _initials(name: string): string {
+    return name
+      .split(/\s+/)
+      .filter(part => part)
+      .slice(0, 2)
+      .map(part => part[0].toUpperCase())
+      .join('');
+  }
+
+  protected render() {
+    if (!this.hass || !this.entities?.length) return html``;
+
+    const people = this.entities
+      .map(entry => (typeof entry === 'string' ? { entity: entry } : entry))
+      .filter(entry => entry && this.hass.states[entry.entity]);
+    if (!people.length) return html``;
+
+    return html`
+      <div class="people ${people.length > 2 || (this.compact && people.length > 1) ? 'overlap' : ''}">
+        ${people.map(entry => {
+          const st = this.hass.states[entry.entity];
+          const name = entry.name || st.attributes?.friendly_name || entry.entity;
+          const where = st.state === 'home' ? 'home' : st.state === 'not_home' ? 'away' : 'zone';
+          const whereText = where === 'home' ? 'Home' : where === 'away' ? 'Away' : st.state;
+          const picture = st.attributes?.entity_picture;
+          return html`
+            <button class="person ${where}" title="${name}: ${whereText}" aria-label="${name}: ${whereText}"
+              @click="${(e: Event) => { e.stopPropagation(); moreInfo(entry.entity); }}">
+              ${picture
+                ? html`<img src="${picture}" alt="" loading="lazy" />`
+                : html`<span class="initials">${this._initials(name)}</span>`}
+              <span class="dot"></span>
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+      }
+
+      .people {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .people.overlap {
+        gap: 0;
+      }
+
+      .people.overlap .person + .person {
+        margin-left: -8px;
+      }
+
+      .person {
+        position: relative;
+        width: 36px;
+        height: 36px;
+        padding: 2px;
+        border: none;
+        border-radius: 50%;
+        background: none;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .person img,
+      .person .initials {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        object-fit: cover;
+        display: block;
+        box-shadow: 0 0 0 2px var(--sidebar-background, #0d1a30);
+      }
+
+      .person .initials {
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--sidebar-text-color, #fff);
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      /* away: dim the avatar so "who's home" reads at a glance */
+      .person.away img,
+      .person.away .initials {
+        opacity: 0.5;
+        filter: grayscale(1);
+      }
+
+      /* compact: fits beside the weather icon and temperature */
+      :host([compact]) .person {
+        width: 34px;
+        height: 34px;
+      }
+
+      :host([compact]) .person img,
+      :host([compact]) .person .initials {
+        width: 30px;
+        height: 30px;
+      }
+
+      :host([compact]) .people.overlap .person + .person {
+        margin-left: -6px;
+      }
+
+      .dot {
+        position: absolute;
+        right: 1px;
+        bottom: 1px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #64748b;
+        box-shadow: 0 0 0 2px var(--sidebar-background, #0d1a30);
+      }
+
+      .person.home .dot {
+        background: #22c55e;
+      }
+
+      .person.zone .dot {
+        background: #3b82f6;
+      }
+    `;
+  }
+}
+
+customElements.define('sidebar-presence', PresenceElement);
 
 
 const weatherIconUrls = {
@@ -1174,6 +1543,8 @@ class SidebarCard extends LitElement {
   CUSTOM_TYPE_PREFIX = 'custom:';
   notifications = false; // Add this line
   glanceBar: GlanceItem[] | null = null;
+  glancePosition: GlancePosition = 'bottom';
+  presence: (string | PresenceEntry)[] = [];
   private _resizeObserver: any = null;
 
   // Markus:
@@ -1356,7 +1727,12 @@ class SidebarCard extends LitElement {
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
     this.notifications = this.config.notifications ? this.config.notifications : false;
-    this.glanceBar = this.config.glanceBar ? this.config.glanceBar : null;
+    const glance = normalizeGlanceBar(this.config.glanceBar);
+    this.glanceBar = glance.items.length ? glance.items : null;
+    this.glancePosition = glance.position;
+    this.presence = Array.isArray(this.config.presence) ? this.config.presence : [];
+    const showPresence = this.presence.length > 0;
+    const glanceInAttention = !!this.glanceBar && this.glancePosition === 'attention';
 
     return html`
       ${addStyle
@@ -1397,7 +1773,7 @@ class SidebarCard extends LitElement {
           : html``}
         ${this.weather && this.weatherEntity
           ? html`
-              <div class="weather-widget">
+              <div class="weather-widget${showPresence ? ' with-presence' : ''}">
                 <div class="weather-icon">
                   <i class="meteo-icon"></i>
                 </div>
@@ -1405,9 +1781,14 @@ class SidebarCard extends LitElement {
                   <span class="weather-temp"></span>
                   <span class="weather-desc"></span>
                 </div>
+                ${showPresence
+                  ? html`<sidebar-presence class="in-weather" compact .hass=${this.hass} .entities=${this.presence}></sidebar-presence>`
+                  : html``}
               </div>
             `
-          : html``}
+          : showPresence
+            ? html`<sidebar-presence class="standalone" .hass=${this.hass} .entities=${this.presence}></sidebar-presence>`
+            : html``}
         ${sidebarMenu && sidebarMenu.length > 0
           ? html`
               <ul class="sidebarMenu">
@@ -1443,9 +1824,16 @@ class SidebarCard extends LitElement {
               </ul>
             `
           : html``}
-        ${this.notifications
+        ${this.notifications || glanceInAttention
           ? html`
-              <notifications-element .hass=${this.hass}></notifications-element>
+              <div class="attention">
+                ${glanceInAttention
+                  ? html`<glance-bar-element mode="alerts" .hass=${this.hass} .items=${this.glanceBar}></glance-bar-element>`
+                  : html``}
+                ${this.notifications
+                  ? html`<notifications-element .hass=${this.hass}></notifications-element>`
+                  : html``}
+              </div>
             `
           : html``}
         ${this.bottomCard
@@ -1453,7 +1841,7 @@ class SidebarCard extends LitElement {
               <div class="bottom"></div>
             `
           : html``}
-        ${this.glanceBar && this.glanceBar.length > 0
+        ${this.glanceBar && !glanceInAttention
           ? html`<glance-bar-element .hass=${this.hass} .items=${this.glanceBar}></glance-bar-element>`
           : html``}
       </div>
@@ -2347,6 +2735,46 @@ class SidebarCard extends LitElement {
         border: 1px solid var(--sidebar-border-color);
         border-radius: 12px;
         backdrop-filter: blur(10px);
+      }
+
+      /* Presence on the weather row */
+      .weather-widget.with-presence {
+        padding: 16px;
+      }
+
+      .weather-widget.with-presence .weather-icon {
+        width: 48px;
+        height: 48px;
+        margin-right: 12px;
+        box-sizing: border-box;
+      }
+
+      .weather-widget sidebar-presence.in-weather {
+        margin-left: auto;
+        padding-left: 8px;
+        flex-shrink: 0;
+      }
+
+      sidebar-presence.standalone {
+        margin: 0 0 24px 0;
+      }
+
+      /* Attention zone: live alerts + notifications. Anchored to the bottom so
+         it grows upward and the clock and menu above never move. It has no
+         position of its own: the notification panel must resolve against
+         .sidebar-inner. */
+      .attention {
+        margin-top: auto;
+        padding-top: 16px;
+        padding-bottom: 8px;
+      }
+
+      .attention ~ .bottom {
+        margin-top: 12px;
+      }
+
+      .attention ~ glance-bar-element {
+        margin-top: 0;
       }
 
       /* Bottom Card */

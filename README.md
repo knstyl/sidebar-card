@@ -70,6 +70,9 @@ Under `sidebar:` you can configure the following options:
 | `hideHassSidebar` | boolean | optional | `true` | Hide the home assistant sidebar |
 | `hideOnPath` | array | optional | /lovelace/camera | If you don't want the sidebar on every path you can add a list of paths where it should hide the sidebar |
 | `hideTopMenu` | boolean | optional | `true` | Hide the top home assistant menu |
+| `notifications` | boolean | optional | `true` | Show Home Assistant persistent notifications as a stack in the Attention zone; tap it to open a panel over the sidebar |
+| `presence` | array | optional | *see info below* | `person` entities shown as avatars on the weather row (or under the date without weather) |
+| `glanceBar` | array or object | optional | *see info below* | Status icons pinned to the bottom (list form), or alert rows in the Attention zone (`position: attention`) |
 | `debug` | boolean | optional | `false` | Show debugging messages in the browser's developer console |
 
 When using **hideTopMenu** and/or **hideHassSidebar** you can disable this by adding `?sidebarOff` to the url.
@@ -230,6 +233,62 @@ sidebar:
         width: 100%;
         background-color:#FFF;
       }
+```
+
+#### presence
+
+A list of `person` entities, or `{ entity, name }` objects. Each shows as an avatar
+(the person's picture, or initials) with a dot: green when home, grey when away,
+blue in another zone. Away avatars are dimmed. Tapping one opens more-info.
+
+```
+sidebar:
+  weather: true
+  weatherEntity: weather.home
+  presence:
+    - person.sam
+    - entity: person.michelle
+      name: Michelle
+```
+
+#### Attention zone and glanceBar
+
+Live alerts and notifications share one zone, anchored to the bottom of the
+sidebar. It grows upward, so the clock and menu never move, and it disappears
+when there is nothing to act on.
+
+`glanceBar` accepts two forms:
+
+- **List** (original behaviour): icon buttons pinned to the bottom of the sidebar.
+- **Object with `position: attention`**: each visible item becomes a slim alert
+  row above the notification stack. Alerts sort before warnings, and anything past
+  the first two folds into a "+N more" row.
+
+Extra item options in the Attention zone:
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `label` | string | Row text. Supports `{name}`, `{state}` and `{unit}`. Defaults to the entity name |
+| `tone` | `alert` / `warning` / `info`, or thresholds | Fixed tone, or `{ warn_above, alert_above, warn_below, alert_below }` on the numeric state. Defaults to `alert` |
+
+The existing `show`, `icon` and `tap_action` options work in both forms.
+
+```
+sidebar:
+  notifications: true
+  glanceBar:
+    position: attention
+    items:
+      - entity: binary_sensor.front_door
+        icon: mdi:door-open
+        label: Front door open
+        tone: alert
+        show: { condition: state, state: 'on' }
+      - entity: sensor.airnow_aqi
+        icon: mdi:air-filter
+        label: "AQI {state}"
+        tone: { warn_above: 100, alert_above: 150 }
+        show: { condition: numeric_above, threshold: 100 }
 ```
 
 ## Screenshots
