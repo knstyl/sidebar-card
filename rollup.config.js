@@ -5,8 +5,19 @@ import babel from 'rollup-plugin-babel';
 import { terser } from 'rollup-plugin-terser';
 import serve from 'rollup-plugin-serve';
 import json from '@rollup/plugin-json';
+import url from '@rollup/plugin-url';
 
 const dev = process.env.ROLLUP_WATCH;
+
+const serveopts = {
+  contentBase: ['.'],
+  host: '0.0.0.0',
+  port: 5000,
+  allowCrossOrigin: true,
+  headers: {
+    'Access-Control-Allow-Origin': '*',
+  },
+};
 
 const plugins = [
   nodeResolve(),
@@ -20,16 +31,13 @@ const plugins = [
   babel({
     exclude: 'node_modules/**',
   }),
-  dev && serve({
-    contentBase: ['./dist'],
-    host: '0.0.0.0',
-    port: 5005,
-    allowCrossOrigin: true,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-    },
-  }),
+  dev && serve(serveopts),
   !dev && terser(),
+  url({
+    include: ['**/*.svg'],
+    limit: 0,
+    fileName: '[name][extname]',
+  }),
 ].filter(Boolean);
 
 export default {

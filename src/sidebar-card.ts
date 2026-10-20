@@ -9,18 +9,1140 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.1.9.8.0';
+const SIDEBAR_CARD_VERSION = '0.2.6';
 
 // ##########################################################################################
 // ###   Import dependencies
 // ##########################################################################################
 
-import { css, html, LitElement } from 'lit-element';
+import { css, html, svg, LitElement } from 'lit-element';
+import { repeat } from 'lit-html/directives/repeat';
 import { moreInfo } from 'card-tools/src/more-info';
 import { hass, provideHass } from 'card-tools/src/hass';
 import { subscribeRenderTemplate } from 'card-tools/src/templates';
 import moment from 'moment/min/moment-with-locales';
 import { forwardHaptic, navigate, toggleEntity } from 'custom-card-helpers';
+
+
+// ##########################################################################################
+// ###   Notifications Element
+// ##########################################################################################
+interface HassEntity {
+  entity_id: string;
+  state: string;
+  attributes: any;
+}
+
+interface HassStates {
+  [entity_id: string]: HassEntity;
+}
+
+interface Hass {
+  states: HassStates;
+  callService: (domain: string, service: string, data?: any) => void;
+  language?: string;
+}
+
+interface NotificationEntity {
+  notification_id: string;
+  title: string;
+  message: string;
+  created_at: string;
+}
+
+type NotificationSeverity = 'error' | 'warning' | 'info' | 'success';
+
+interface NotificationGroup {
+  key: string;
+  ids: string[];
+  title: string;
+  message: string;
+  created_at: string;
+  severity: NotificationSeverity;
+}
+
+const NOTIFICATION_SEVERITY_RANK: { [key in NotificationSeverity]: number } = {
+  error: 0,
+  warning: 1,
+  info: 2,
+  success: 3
+};
+
+// Close the panel by itself after this long without interaction, so a wall
+// tablet never stays stuck on the notification list.
+const NOTIFICATION_PANEL_IDLE_MS = 30000;
+const NOTIFICATION_DISMISS_ANIMATION_MS = 200;
+const NOTIFICATION_STACK_PEEK_PX = 9;
+
+const NOTIFICATION_ICONS: { [key in NotificationSeverity]: any } = {
+  error: svg`<circle cx="12" cy="12" r="10"></circle><path d="M15 9l-6 6M9 9l6 6"></path>`,
+  warning: svg`<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path>`,
+  info: svg`<circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path>`,
+  success: svg`<circle cx="12" cy="12" r="10"></circle><path d="m8 12 3 3 5-6"></path>`
+};
+
+const CLOSE_ICON = html`
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <path d="M18 6 6 18M6 6l12 12"></path>
+  </svg>
+`;
+
+class NotificationsElement extends LitElement {
+  hass: any;
+  notifications: NotificationEntity[] = [];
+  open = false;
+
+  private _byId: Map<string, NotificationEntity> = new Map();
+  private _unsubscribe: (() => void) | null = null;
+  private _subscribing = false;
+  private _expandedKeys: Set<string> = new Set();
+  private _dismissingKeys: Set<string> = new Set();
+  private _idleTimer: number | null = null;
+  private _clockTimer: number | null = null;
+  private _sidebarInner: HTMLElement | null = null;
+  private _sidebarOverflow = '';
+  private _onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && this.open) this._setOpen(false);
+  };
+
+  /* **************************************** *
+   *        Element's public properties       *
+   * **************************************** */
+  static get properties() {
+    return {
+      hass: { type: Object },
+      notifications: { type: Array, attribute: false },
+      open: { type: Boolean, reflect: true }
+    };
+  }
+
+  constructor() {
+    super();
+    this.hass = null;
+    this.notifications = [];
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    // keep the "10m ago" labels fresh
+    this._clockTimer = window.setInterval(() => {
+      if (this.notifications.length) this.requestUpdate();
+    }, 60000);
+  }
+
+  protected updated(changedProperties): void {
+    if (changedProperties.has('hass') && this.hass?.connection && !this._unsubscribe && !this._subscribing) {
+      this._subscribeNotifications();
+    }
+    if (changedProperties.has('notifications') && this.open && this.notifications.length === 0) {
+      this._setOpen(false);
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._unsubscribe) {
+      this._unsubscribe();
+      this._unsubscribe = null;
+    }
+    if (this._clockTimer) window.clearInterval(this._clockTimer);
+    this._clockTimer = null;
+    if (this.open) this._setOpen(false);
+  }
+
+  /* **************************************** *
+   *               Subscription               *
+   * **************************************** */
+
+  private async _subscribeNotifications(): Promise<void> {
+    this._subscribing = true;
+    try {
+      this._unsubscribe = await this.hass.connection.subscribeMessage(
+        (message: any) => this._handleMessage(message),
+        { type: 'persistent_notification/subscribe' }
+      );
+    } catch (err) {
+      console.warn('sidebar-card: could not subscribe to notifications', err);
+    } finally {
+      this._subscribing = false;
+    }
+  }
+
+  // Key everything by notification_id: HA re-sends an existing id as `added`
+  // or `updated` (e.g. repeated failed logins reuse `http-login`), so appending
+  // would render the same notification more than once.
+  private _handleMessage(message: any): void {
+    const changed = (Object.values(message.notifications || {}) as NotificationEntity[]);
+    if (message.type === 'current') {
+      this._byId.clear();
+    }
+    if (message.type === 'removed') {
+      Object.keys(message.notifications || {}).forEach(id => this._byId.delete(id));
+    } else {
+      changed.forEach(n => this._byId.set(n.notification_id, n));
+    }
+    this.notifications = Array.from(this._byId.values());
+  }
+
+  /* **************************************** *
+   *                 Helpers                  *
+   * **************************************** */
+
+  private _severity(n: NotificationEntity): NotificationSeverity {
+    const text = `${n.title || ''} ${n.notification_id || ''}`.toLowerCase();
+    if (/invalid|error|failed|http-login|unavailable|offline/.test(text)) return 'error';
+    if (/success|completed|finished/.test(text)) return 'success';
+    if (/update|available|discover|new device|release/.test(text)) return 'info';
+    return 'warning';
+  }
+
+  // Same title = same thing happening again; show it once with a count.
+  private _groups(): NotificationGroup[] {
+    const groups = new Map<string, NotificationGroup>();
+    this.notifications.forEach(n => {
+      const key = (n.title || n.notification_id).trim();
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, {
+          key,
+          ids: [n.notification_id],
+          title: n.title || 'Notification',
+          message: n.message,
+          created_at: n.created_at,
+          severity: this._severity(n)
+        });
+        return;
+      }
+      existing.ids.push(n.notification_id);
+      if (new Date(n.created_at).getTime() > new Date(existing.created_at).getTime()) {
+        existing.created_at = n.created_at;
+        existing.message = n.message;
+      }
+    });
+    // Most severe first, then newest: a failed login stays on top of the stack
+    // even if an update notice arrives after it.
+    return Array.from(groups.values()).sort(
+      (a, b) =>
+        NOTIFICATION_SEVERITY_RANK[a.severity] - NOTIFICATION_SEVERITY_RANK[b.severity] ||
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }
+
+  private _getTimeAgo(createdAt: string): string {
+    const diffInMinutes = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+    if (isNaN(diffInMinutes) || diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    return `${Math.floor(diffInHours / 24)}d ago`;
+  }
+
+  // Notification text comes from integrations and automations, so escape it
+  // first and then allow only a small markdown subset (bold, code, links, bullets).
+  private _formatMessage(message: string): string {
+    if (!message) return '';
+    const escape = (s: string) =>
+      s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const inline = (s: string) =>
+      escape(s)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text, href) => {
+          if (/^https?:\/\//i.test(href)) return `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+          if (href.startsWith('/')) return `<a href="${href}">${text}</a>`;
+          return text;
+        });
+
+    return message
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line)
+      .map(line => {
+        const bullet = line.match(/^(?:[•*-])\s+(.*)$/);
+        return bullet ? `<div class="bullet-point">• ${inline(bullet[1])}</div>` : `<div>${inline(line)}</div>`;
+      })
+      .join('');
+  }
+
+  /* **************************************** *
+   *                 Actions                  *
+   * **************************************** */
+
+  private _dismissGroup(group: NotificationGroup, e?: Event): void {
+    if (e) e.stopPropagation();
+    if (!this.hass || this._dismissingKeys.has(group.key)) return;
+    this._dismissingKeys.add(group.key);
+    this.requestUpdate();
+    window.setTimeout(() => {
+      group.ids.forEach(id =>
+        this.hass.callService('persistent_notification', 'dismiss', { notification_id: id })
+      );
+      this._dismissingKeys.delete(group.key);
+      this._expandedKeys.delete(group.key);
+      this.requestUpdate();
+    }, NOTIFICATION_DISMISS_ANIMATION_MS);
+  }
+
+  private _dismissAll(): void {
+    if (!this.hass) return;
+    this.notifications.forEach(n =>
+      this.hass.callService('persistent_notification', 'dismiss', { notification_id: n.notification_id })
+    );
+  }
+
+  private _toggleMessage(group: NotificationGroup, e: Event): void {
+    if ((e.target as HTMLElement).closest('a')) return; // let links work
+    if (this._expandedKeys.has(group.key)) this._expandedKeys.delete(group.key);
+    else this._expandedKeys.add(group.key);
+    this.requestUpdate();
+  }
+
+  private _onStackActivate(e: Event): void {
+    if ((e.target as HTMLElement).closest('a')) return;
+    this._setOpen(true);
+  }
+
+  private _onStackKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      this._setOpen(true);
+    }
+  }
+
+  private _setOpen(open: boolean): void {
+    if (open === this.open) return;
+    if (open) {
+      // .sidebar-inner is position:fixed, so it is the containing block for the
+      // absolutely positioned panel. It also scrolls, so pin the panel to the
+      // visible area and lock scrolling while the panel is open.
+      this._sidebarInner = this.closest('.sidebar-inner') as HTMLElement | null;
+      if (this._sidebarInner) {
+        this.style.setProperty('--ns-panel-top', `${this._sidebarInner.scrollTop}px`);
+        this._sidebarOverflow = this._sidebarInner.style.overflow;
+        this._sidebarInner.style.overflow = 'hidden';
+      }
+      window.addEventListener('keydown', this._onKeyDown);
+      this.open = true;
+      this._bumpIdle();
+      this.updateComplete.then(() => {
+        const close = this.shadowRoot?.querySelector('.panel-close') as HTMLElement | null;
+        if (close) close.focus({ preventScroll: true });
+      });
+    } else {
+      this.open = false;
+      if (this._sidebarInner) this._sidebarInner.style.overflow = this._sidebarOverflow;
+      this._sidebarInner = null;
+      window.removeEventListener('keydown', this._onKeyDown);
+      if (this._idleTimer) window.clearTimeout(this._idleTimer);
+      this._idleTimer = null;
+    }
+  }
+
+  private _bumpIdle(): void {
+    if (!this.open) return;
+    if (this._idleTimer) window.clearTimeout(this._idleTimer);
+    this._idleTimer = window.setTimeout(() => this._setOpen(false), NOTIFICATION_PANEL_IDLE_MS);
+  }
+
+  /* **************************************** *
+   *                 Rendering                *
+   * **************************************** */
+
+  private _renderCard(group: NotificationGroup, opts: { inStack: boolean; moreCount?: number }) {
+    const expanded = this._expandedKeys.has(group.key);
+    const classes = [
+      'card',
+      group.severity,
+      expanded ? 'expanded' : '',
+      this._dismissingKeys.has(group.key) ? 'dismissing' : ''
+    ].join(' ');
+    return html`
+      <div class="${classes}">
+        <div class="card-head">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            ${NOTIFICATION_ICONS[group.severity]}
+          </svg>
+          <div class="title-wrap">
+            <h3 class="title">
+              ${group.title}${group.ids.length > 1 ? html`<span class="count-pill">×${group.ids.length}</span>` : ''}
+            </h3>
+            <div class="meta">${this._getTimeAgo(group.created_at)}</div>
+          </div>
+          <button class="card-close" aria-label="Dismiss ${group.title}"
+            @click="${(e: Event) => this._dismissGroup(group, e)}">
+            ${CLOSE_ICON}
+          </button>
+        </div>
+        <div class="msg" .innerHTML="${this._formatMessage(group.message)}"
+          @click="${opts.inStack ? null : (e: Event) => this._toggleMessage(group, e)}"></div>
+        ${opts.moreCount
+          ? html`
+              <div class="stack-hint">
+                <span class="more">+${opts.moreCount} more</span>
+                <span>Tap to view all</span>
+              </div>
+            `
+          : ''}
+      </div>
+    `;
+  }
+
+  private _renderPanel(groups: NotificationGroup[]) {
+    return html`
+      <div class="panel ${this.open ? 'open' : ''}" role="dialog" aria-modal="true"
+        aria-labelledby="ns-panel-title" aria-hidden="${this.open ? 'false' : 'true'}"
+        @pointerdown="${this._bumpIdle}" @scroll="${this._bumpIdle}">
+        <div class="panel-inner">
+          <div class="panel-head">
+            <h2 id="ns-panel-title">Notifications<span class="panel-count">${groups.length}</span></h2>
+            <button class="panel-close" aria-label="Close notifications" @click="${() => this._setOpen(false)}">
+              ${CLOSE_ICON}
+            </button>
+          </div>
+          <div class="panel-list" @scroll="${this._bumpIdle}">
+            ${repeat(groups, g => g.key, g => this._renderCard(g, { inStack: false }))}
+          </div>
+          <div class="panel-foot">
+            <button class="clear-all" @click="${this._dismissAll}">Clear all</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  protected render() {
+    const groups = this._groups();
+    if (!groups.length) return html``;
+
+    const stacked = groups.length > 1;
+    // only the first three can be seen in the stack; the rest live in the panel
+    const visible = stacked ? groups.slice(0, 3) : groups;
+    const peek = stacked ? Math.min(groups.length - 1, 2) * NOTIFICATION_STACK_PEEK_PX : 0;
+
+    return html`
+      <div class="ns ${stacked ? 'stacked' : 'single'}">
+        ${stacked
+          ? html`
+              <div class="ns-list" style="--peek: ${peek}px" role="button" tabindex="0"
+                aria-label="Show all ${groups.length} notifications"
+                @click="${this._onStackActivate}" @keydown="${this._onStackKeyDown}">
+                ${repeat(visible, g => g.key, (g, i) =>
+                  this._renderCard(g, { inStack: true, moreCount: i === 0 ? groups.length - 1 : 0 })
+                )}
+              </div>
+            `
+          : html`
+              <div class="ns-list">
+                ${repeat(visible, g => g.key, g => this._renderCard(g, { inStack: false }))}
+              </div>
+            `}
+      </div>
+      ${stacked || this.open ? this._renderPanel(groups) : ''}
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+        width: 100%;
+        /* themable; override from the card's style: option */
+        --ns-text: var(--sidebar-text-color, #f1f5f9);
+        --ns-text-2: rgba(241, 245, 249, 0.72);
+        --ns-text-3: rgba(241, 245, 249, 0.5);
+        --ns-card-bg: var(--sidebar-notification-background, #18263f);
+        --ns-card-border: rgba(255, 255, 255, 0.08);
+        --ns-scrim: var(--sidebar-notification-scrim, rgba(9, 16, 31, 0.86));
+        --ns-error: #ef4444;
+        --ns-warning: #f59e0b;
+        --ns-info: #3b82f6;
+        --ns-success: #10b981;
+        /* no position here: the panel must resolve against .sidebar-inner */
+      }
+
+      .ns {
+        margin: 20px 0;
+      }
+
+      .ns-list {
+        position: relative;
+        display: grid;
+      }
+
+      .ns.stacked .ns-list {
+        cursor: pointer;
+        padding-bottom: var(--peek, 0px);
+        border-radius: 14px;
+        outline: none;
+      }
+
+      .ns.stacked .ns-list:focus-visible {
+        box-shadow: 0 0 0 2px var(--ns-info);
+      }
+
+      /* ---------- card ---------- */
+      .card {
+        --sev: var(--ns-warning);
+        position: relative;
+        grid-area: 1 / 1;
+        background: linear-gradient(
+            color-mix(in srgb, var(--sev) 10%, transparent),
+            color-mix(in srgb, var(--sev) 10%, transparent)
+          ),
+          var(--ns-card-bg);
+        border: 1px solid var(--ns-card-border);
+        border-radius: 14px;
+        padding: 12px 8px 12px 14px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+        overflow: hidden;
+        transform-origin: bottom center;
+        flex-shrink: 0;
+        transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.28s ease;
+      }
+
+      /* severity accent bar */
+      .card::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: var(--sev);
+      }
+
+      .card.error {
+        --sev: var(--ns-error);
+      }
+      .card.warning {
+        --sev: var(--ns-warning);
+      }
+      .card.info {
+        --sev: var(--ns-info);
+      }
+      .card.success {
+        --sev: var(--ns-success);
+      }
+
+      .card.dismissing {
+        opacity: 0 !important;
+        transform: translateX(40px) !important;
+      }
+
+      /* ---------- stacked: cards share one grid cell, back cards peek out ---------- */
+      .ns.stacked .card:nth-child(1) {
+        z-index: 3;
+      }
+      .ns.stacked .card:nth-child(2) {
+        z-index: 2;
+        transform: translateY(9px) scale(0.95);
+        opacity: 0.9;
+      }
+      .ns.stacked .card:nth-child(3) {
+        z-index: 1;
+        transform: translateY(18px) scale(0.9);
+        opacity: 0.65;
+      }
+      /* back cards are just edges: take them out of flow so only the front
+         card sets the stack's height */
+      .ns.stacked .card:not(:first-child) {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: calc(100% - var(--peek, 0px));
+        box-sizing: border-box;
+      }
+      .ns.stacked .card:not(:first-child) * {
+        visibility: hidden;
+      }
+
+      .card-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .icon {
+        width: 18px;
+        height: 18px;
+        flex-shrink: 0;
+        margin-top: 1px;
+        color: var(--sev);
+      }
+
+      .title-wrap {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.35;
+        color: var(--ns-text);
+      }
+
+      .meta {
+        font-size: 12px;
+        color: var(--ns-text-3);
+        margin-top: 2px;
+      }
+
+      .count-pill {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: var(--sev);
+        color: #0b1220;
+        margin-left: 6px;
+        vertical-align: 1px;
+      }
+
+      .card-close {
+        width: 32px;
+        height: 32px;
+        margin: -6px -2px 0 0;
+        flex-shrink: 0;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: none;
+        border: none;
+        padding: 0;
+        color: var(--ns-text-3);
+        cursor: pointer;
+      }
+
+      .card-close:active {
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--ns-text);
+      }
+
+      .card-close svg,
+      .panel-close svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .msg {
+        margin: 8px 6px 0 28px;
+        font-size: 13px;
+        line-height: 1.45;
+        color: var(--ns-text-2);
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        word-break: break-word;
+      }
+
+      .ns.single .msg,
+      .panel .msg {
+        cursor: pointer;
+      }
+
+      .card.expanded .msg {
+        -webkit-line-clamp: unset;
+        display: block;
+      }
+
+      .msg .bullet-point {
+        margin-left: 4px;
+      }
+
+      .msg a {
+        color: var(--ns-text);
+      }
+
+      .msg code {
+        font-size: 12px;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .stack-hint {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 10px 6px 0 28px;
+        font-size: 12px;
+        color: var(--ns-text-3);
+      }
+
+      .more {
+        color: var(--ns-text-2);
+        font-weight: 500;
+      }
+
+      /* ---------- panel: covers the whole sidebar ---------- */
+      .panel {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: var(--ns-panel-top, 0px);
+        height: 100%;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        padding: 16px 12px 12px;
+        background: var(--ns-scrim);
+        -webkit-backdrop-filter: blur(6px);
+        backdrop-filter: blur(6px);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.22s ease, visibility 0s linear 0.22s;
+      }
+
+      .panel.open {
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 0.22s ease;
+      }
+
+      .panel-inner {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        transform: translateY(32px) scale(0.97);
+        transform-origin: top center;
+        transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+
+      .panel.open .panel-inner {
+        transform: none;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 2px 12px 6px;
+        flex-shrink: 0;
+      }
+
+      .panel-head h2 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--ns-text);
+      }
+
+      .panel-count {
+        font-size: 12px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 999px;
+        margin-left: 8px;
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--ns-text-2);
+        vertical-align: 2px;
+      }
+
+      .panel-close {
+        width: 44px;
+        height: 44px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.08);
+        border: none;
+        padding: 0;
+        color: var(--ns-text);
+        cursor: pointer;
+      }
+
+      .panel-close svg {
+        width: 20px;
+        height: 20px;
+      }
+
+      .panel-close:active {
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .panel-list {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 2px 2px 12px;
+        scrollbar-width: thin;
+      }
+
+      .panel-list .card {
+        grid-area: auto;
+      }
+
+      .panel-foot {
+        flex-shrink: 0;
+        padding-top: 8px;
+        border-top: 1px solid var(--ns-card-border);
+      }
+
+      .clear-all {
+        width: 100%;
+        min-height: 44px;
+        border-radius: 12px;
+        cursor: pointer;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--ns-card-border);
+        color: var(--ns-text-2);
+        font: inherit;
+        font-size: 14px;
+        font-weight: 500;
+      }
+
+      .clear-all:active {
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--ns-text);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .card,
+        .panel,
+        .panel-inner {
+          transition: none;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define('notifications-element', NotificationsElement);
+
+
+// ##########################################################################################
+// ###   Glance Bar - at-a-glance status icons
+// ##########################################################################################
+
+type GlanceConditionType =
+  | 'always' | 'state' | 'state_not'
+  | 'numeric_above' | 'numeric_below'
+  | 'time_after' | 'time_before'
+  | 'sun_below_horizon' | 'sun_above_horizon';
+
+interface GlanceCondition {
+  condition: GlanceConditionType;
+  entity?: string;
+  state?: string | string[];
+  threshold?: number;
+  after?: string;
+  before?: string;
+}
+
+interface GlanceBadge {
+  condition?: GlanceConditionType;
+  entity?: string;
+  state?: string | string[];
+  threshold?: number;
+  after?: string;
+  before?: string;
+  icon?: string;
+  color?: string;
+  label?: 'state' | 'attribute';
+  label_attribute?: string;
+  label_max_length?: number;
+}
+
+interface GlanceItem {
+  entity: string;
+  icon: string;
+  name?: string;
+  color?: string;
+  show?: GlanceCondition | GlanceConditionType;
+  badge?: GlanceBadge;
+  tap_action?: { action: string; entity?: string; navigation_path?: string; url_path?: string };
+}
+
+class GlanceBarElement extends LitElement {
+  hass: any;
+  items: GlanceItem[] = [];
+  private _tickInterval: any = null;
+
+  static get properties() {
+    return { hass: { type: Object }, items: { type: Array } };
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._tickInterval = setInterval(() => this.requestUpdate(), 30000);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this._tickInterval);
+    this._tickInterval = null;
+  }
+
+  private _minutesNow(): number {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  }
+
+  private _parseMinutes(timeStr: string): number {
+    const [h, m] = timeStr.split(':').map(Number);
+    return (h || 0) * 60 + (m || 0);
+  }
+
+  private _evalCondition(cond: GlanceCondition | GlanceConditionType | undefined, defaultEntity: string): boolean {
+    if (!cond || cond === 'always') return true;
+
+    const c: GlanceCondition = typeof cond === 'string' ? { condition: cond } : cond;
+    const entityId = c.entity || defaultEntity;
+    const entityState = this.hass?.states?.[entityId];
+
+    switch (c.condition) {
+      case 'always': return true;
+      case 'state': {
+        if (!entityState) return false;
+        const targets = Array.isArray(c.state) ? c.state : [c.state as string];
+        return targets.includes(entityState.state);
+      }
+      case 'state_not': {
+        if (!entityState) return true;
+        const targets = Array.isArray(c.state) ? c.state : [c.state as string];
+        return !targets.includes(entityState.state);
+      }
+      case 'numeric_above':
+        return entityState && c.threshold !== undefined ? parseFloat(entityState.state) > c.threshold : false;
+      case 'numeric_below':
+        return entityState && c.threshold !== undefined ? parseFloat(entityState.state) < c.threshold : false;
+      case 'time_after':
+        return c.after ? this._minutesNow() >= this._parseMinutes(c.after) : false;
+      case 'time_before':
+        return c.before ? this._minutesNow() < this._parseMinutes(c.before) : false;
+      case 'sun_below_horizon':
+        return this.hass?.states?.['sun.sun']?.state === 'below_horizon';
+      case 'sun_above_horizon':
+        return this.hass?.states?.['sun.sun']?.state === 'above_horizon';
+      default:
+        return false;
+    }
+  }
+
+  private _evalBadge(badge: GlanceBadge | undefined, defaultEntity: string): boolean {
+    if (!badge) return false;
+    return this._evalCondition({
+      condition: badge.condition || 'always',
+      entity: badge.entity,
+      state: badge.state,
+      threshold: badge.threshold,
+      after: badge.after,
+      before: badge.before,
+    }, defaultEntity);
+  }
+
+  private _getBadgeLabel(badge: GlanceBadge | undefined, defaultEntity: string): string | null {
+    if (!badge?.label) return null;
+    const entityId = badge.entity || defaultEntity;
+    const entityState = this.hass?.states?.[entityId];
+    if (!entityState) return null;
+
+    const raw = badge.label === 'attribute' && badge.label_attribute
+      ? String(entityState.attributes[badge.label_attribute] ?? '')
+      : entityState.state;
+
+    const max = badge.label_max_length ?? 3;
+    return raw.length > max ? raw.slice(0, max) : raw;
+  }
+
+  private _handleClick(e: Event, item: GlanceItem) {
+    e.stopPropagation();
+    const action = item.tap_action;
+    if (!action || action.action === 'more-info') {
+      moreInfo(action?.entity || item.entity);
+      return;
+    }
+    switch (action.action) {
+      case 'navigate':
+        if (action.navigation_path) navigate(window, action.navigation_path);
+        break;
+      case 'toggle':
+        toggleEntity(this.hass, action.entity || item.entity);
+        forwardHaptic('success');
+        break;
+      case 'url':
+        if (action.url_path) window.open(action.url_path);
+        break;
+    }
+  }
+
+  protected render() {
+    if (!this.hass || !this.items?.length) return html``;
+
+    const visible = this.items.filter(item =>
+      this.hass.states[item.entity] !== undefined &&
+      this._evalCondition(item.show, item.entity)
+    );
+
+    if (!visible.length) return html``;
+
+    return html`
+      <div class="glance-bar">
+        ${visible.map(item => {
+          const entityState = this.hass.states[item.entity];
+          const label = item.name || entityState?.attributes?.friendly_name || item.entity;
+          const showBadge = this._evalBadge(item.badge, item.entity);
+          const badgeColor = item.badge?.color ?? '#ef4444';
+          const badgeIcon = item.badge?.icon;
+          const badgeLabel = showBadge ? this._getBadgeLabel(item.badge, item.entity) : null;
+
+          return html`
+            <div
+              class="glance-item${showBadge ? ' has-badge' : ''}"
+              title="${label}: ${entityState?.state ?? ''}"
+              @click="${(e) => this._handleClick(e, item)}"
+            >
+              <ha-icon
+                icon="${item.icon}"
+                style="${item.color ? `color: ${item.color}` : ''}"
+              ></ha-icon>
+              ${showBadge ? html`
+                <span class="glance-badge" style="--badge-color: ${badgeColor}">
+                  ${badgeIcon ? html`<ha-icon icon="${badgeIcon}" class="badge-icon"></ha-icon>` : html``}
+                  ${badgeLabel ? html`<span class="badge-label">${badgeLabel}</span>` : html``}
+                </span>
+              ` : html``}
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+        position: sticky;
+        bottom: 0;
+        z-index: 100;
+        /* pushes bar to bottom of the flex column when content is shorter than the sidebar */
+        margin-top: auto;
+      }
+
+      :host::before {
+        content: '';
+        position: absolute;
+        top: -32px;
+        left: 0;
+        right: 0;
+        height: 32px;
+        /* fades into whatever background the bar uses; invisible when bar is transparent */
+        background: linear-gradient(to bottom, transparent, var(--glance-bar-background, transparent));
+        pointer-events: none;
+      }
+
+      .glance-bar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 0 16px;
+        background: var(--glance-bar-background, transparent);
+        border-top: var(--glance-bar-border-top, none);
+      }
+
+      .glance-item {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--sidebar-card-background, rgba(255, 255, 255, 0.06));
+        border: 1px solid var(--sidebar-border-color, rgba(255, 255, 255, 0.1));
+        border-radius: 12px;
+        cursor: pointer;
+        transition: transform 0.2s ease, background 0.2s ease;
+      }
+
+      .glance-item:hover {
+        background: rgba(255, 255, 255, 0.12);
+        transform: scale(1.08);
+      }
+
+      .glance-item ha-icon {
+        color: var(--sidebar-icon-color, rgba(255, 255, 255, 0.85));
+        --mdc-icon-size: 22px;
+        display: flex;
+      }
+
+      .glance-item.has-badge ha-icon {
+        color: var(--sidebar-selected-icon-color, #60a5fa);
+      }
+
+      .glance-badge {
+        position: absolute;
+        top: -5px;
+        right: -5px;
+        min-width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: var(--badge-color, #ef4444);
+        border: 2px solid var(--sidebar-background, var(--primary-background-color, #111));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 2px;
+        box-sizing: border-box;
+        gap: 1px;
+      }
+
+      .badge-icon {
+        --mdc-icon-size: 8px;
+        color: #fff;
+        flex-shrink: 0;
+      }
+
+      .badge-label {
+        font-size: 9px;
+        font-weight: 700;
+        color: #fff;
+        line-height: 1;
+        white-space: nowrap;
+        letter-spacing: -0.02em;
+      }
+    `;
+  }
+}
+
+customElements.define('glance-bar-element', GlanceBarElement);
+
+
+const weatherIconUrls = {
+  'clear-night': '/local/weather-icons/meteocons/clear-night.svg',
+  'cloudy': '/local/weather-icons/meteocons/cloudy.svg',
+  'fog': '/local/weather-icons/meteocons/fog.svg',
+  'hail': '/local/weather-icons/meteocons/hail.svg',
+  'lightning': '/local/weather-icons/meteocons/thunderstorms.svg',
+  'lightning-rainy': '/local/weather-icons/meteocons/thunderstorms.svg',
+  'partlycloudy': '/local/weather-icons/meteocons/partly-cloudy-day.svg',
+  'pouring': '/local/weather-icons/meteocons/rain.svg',
+  'rainy': '/local/weather-icons/meteocons/rain.svg',
+  'snowy': '/local/weather-icons/meteocons/snow.svg',
+  'snowy-rainy': '/local/weather-icons/meteocons/sleet.svg',
+  'sunny': '/local/weather-icons/meteocons/clear-day.svg',
+  'windy': '/local/weather-icons/meteocons/wind.svg',
+  'windy-variant': '/local/weather-icons/meteocons/wind.svg',
+  'exceptional': '/local/weather-icons/meteocons/cloudy.svg'
+};
+
 
 // ##########################################################################################
 // ###   The actual Sidebar Card element
@@ -48,7 +1170,11 @@ class SidebarCard extends LitElement {
   weatherEntity = '';
   weatherFormat = 'temperature_unit';
   bottomCard: any = null;
+  widgetCard: any = null;
   CUSTOM_TYPE_PREFIX = 'custom:';
+  notifications = false; // Add this line
+  glanceBar: GlanceItem[] | null = null;
+  private _resizeObserver: any = null;
 
   // Markus:
   // Stores the setInterval handle for the periodic clock update
@@ -120,6 +1246,93 @@ class SidebarCard extends LitElement {
       this._updateActiveMenu();
     }
 
+
+  /* **************************************** *
+   *              Card Helpers                *
+   * **************************************** */
+
+  async createCard(cardConfig, containerSelector, styleConfig) {
+    if (!cardConfig || typeof cardConfig !== 'object' || !cardConfig.type) {
+      error2console('createCard', 'Invalid card config!');
+      return null;
+    }
+  
+    let tag = cardConfig.type;
+    if (tag.startsWith(this.CUSTOM_TYPE_PREFIX)) {
+      tag = tag.substr(this.CUSTOM_TYPE_PREFIX.length);
+    } else {
+      tag = `hui-${tag}-card`;
+    }
+  
+    console.info(`Creating card with tag: ${tag}`);
+  
+    // Method 2: Create element and verify it has required methods
+    const cardElement = document.createElement(tag);
+    
+    // Wait a bit for the element to fully initialize
+    await new Promise(resolve => setTimeout(resolve, 150));
+    
+    if (!cardElement) {
+      error2console('createCard', `Failed to create element: ${tag}`);
+      return null;
+    }
+  
+    // Check if it's a proper Home Assistant card
+    if (typeof cardElement.setConfig !== 'function') {
+      // Try to wait a bit more and check again
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      if (typeof cardElement.setConfig !== 'function') {
+        console.error(`Element ${tag} is not a valid Home Assistant card (no setConfig method)`);
+        return null;
+      }
+    }
+    try {
+      // Configure the card
+      cardElement.setConfig(cardConfig);
+      cardElement.hass = hass();
+  
+      // Append to container
+      const container = this.shadowRoot.querySelector(containerSelector);
+      if (container) {
+        container.appendChild(cardElement);
+        provideHass(cardElement);
+  
+        // Apply custom styles if provided
+        if (styleConfig && styleConfig.cardStyle) {
+          this.applyCardStyles(cardElement, styleConfig.cardStyle);
+        }
+  
+        console.info(`Successfully created and configured card: ${tag}`);
+        return cardElement;
+      } else {
+        error2console('createCard', `Container ${containerSelector} not found`);
+        return null;
+      }
+    } catch (error) {
+      error2console('createCard', `Error configuring card ${tag}:`, error);
+      return null;
+    }
+  }
+  
+  applyCardStyles(cardElement, styleString) {
+    let iterations = 0;
+    const maxIterations = 20; // Increased max iterations
+    
+    const interval = setInterval(() => {
+      if (cardElement && cardElement.shadowRoot) {
+        clearInterval(interval);
+        const styleElement = document.createElement('style');
+        styleElement.innerHTML = styleString;
+        cardElement.shadowRoot.appendChild(styleElement);
+        console.info('Card styles applied successfully');
+      } else if (++iterations >= maxIterations) {
+        clearInterval(interval);
+        console.warn('Failed to apply card styles - shadowRoot not available');
+      }
+    }, 100);
+  }
+
   /* **************************************** *
    *   Element's HTML renderer (lit-element)  *
    * **************************************** */
@@ -139,8 +1352,11 @@ class SidebarCard extends LitElement {
     this.weather = this.config.weather ? this.config.weather : false;
     this.weatherEntity = this.config.weatherEntity ? this.config.weatherEntity : '';
     this.weatherFormat = this.config.weatherFormat ? this.config.weatherFormat : 'temperature_unit';
+    this.widgetCard = this.config.widgetCard ? this.config.widgetCard : null;
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
+    this.notifications = this.config.notifications ? this.config.notifications : false;
+    this.glanceBar = this.config.glanceBar ? this.config.glanceBar : null;
 
     return html`
       ${addStyle
@@ -211,6 +1427,11 @@ class SidebarCard extends LitElement {
               </ul>
             `
           : html``}
+        ${this.widgetCard
+          ? html`
+              <div class="widget-card"></div>
+            `
+          : html``}
         ${this.config.template
           ? html`
               <ul class="template">
@@ -222,10 +1443,18 @@ class SidebarCard extends LitElement {
               </ul>
             `
           : html``}
+        ${this.notifications
+          ? html`
+              <notifications-element .hass=${this.hass}></notifications-element>
+            `
+          : html``}
         ${this.bottomCard
           ? html`
               <div class="bottom"></div>
             `
+          : html``}
+        ${this.glanceBar && this.glanceBar.length > 0
+          ? html`<glance-bar-element .hass=${this.hass} .items=${this.glanceBar}></glance-bar-element>`
           : html``}
       </div>
     `;
@@ -308,45 +1537,28 @@ class SidebarCard extends LitElement {
     if (!this.weather || !this.weatherEntity || !this.hass.states[this.weatherEntity]) {
       return;
     }
-
+  
     const weatherState = this.hass.states[this.weatherEntity];
     const weatherIcon = this.shadowRoot.querySelector('.meteo-icon');
     const weatherTemp = this.shadowRoot.querySelector('.weather-temp');
     const weatherDesc = this.shadowRoot.querySelector('.weather-desc');
 
     if (weatherIcon && weatherTemp && weatherDesc) {
-      // Map Home Assistant weather states to Meteo icons
-      const iconMapping = {
-        'clear-night': 'wi-night-clear',
-        'cloudy': 'wi-cloudy',
-        'fog': 'wi-fog',
-        'hail': 'wi-hail',
-        'lightning': 'wi-lightning',
-        'lightning-rainy': 'wi-storm-showers',
-        'partlycloudy': 'wi-day-cloudy',
-        'pouring': 'wi-rain',
-        'rainy': 'wi-showers',
-        'snowy': 'wi-snow',
-        'snowy-rainy': 'wi-sleet',
-        'sunny': 'wi-day-sunny',
-        'windy': 'wi-windy',
-        'windy-variant': 'wi-strong-wind',
-        'exceptional': 'wi-alien'
-      };
 
-      // Set weather icon
-      const iconClass = iconMapping[weatherState.state] || 'wi-na';
-      weatherIcon.className = `meteo-icon ${iconClass}`;
-
+    // Get the icon URL
+    const iconUrl = weatherIconUrls[weatherState.state] || weatherIconUrls['sunny'];
+    
+    // Use img tag to display the SVG
+    weatherIcon.innerHTML = `<img src="${iconUrl}" alt="${weatherState.state}" class="weather-svg-icon">`;
+  
       // Set temperature
       const temp = Math.round(weatherState.attributes.temperature);
       const unit = this.weatherFormat === 'temperature_unit' 
         ? weatherState.attributes.unit_of_measurement || '°C'
         : (this.weatherFormat || '°C');
       weatherTemp.textContent = `${temp}${unit}`;
-
-      // Set description
-      const condition = weatherState.attributes.friendly_name || weatherState.state;
+  
+      // Set description  
       weatherDesc.textContent = this._formatWeatherCondition(weatherState.state);
     }
   }
@@ -391,41 +1603,52 @@ class SidebarCard extends LitElement {
     }
   }
 
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect();
+      this._resizeObserver = null;
+    }
+    // Stop the timers started in connectedCallback() so a reconnect restarts
+    // them instead of leaking duplicates
+    window.removeEventListener('location-changed', this._boundLocationChange);
+    clearInterval(this._clockInterval);
+    clearInterval(this._dateInterval);
+    clearInterval(this._weatherInterval);
+    this._clockInterval = null;
+    this._dateInterval = null;
+    this._weatherInterval = null;
+  }
+
   firstUpdated() {
     provideHass(this);
     let root = getRoot();
+    if (!root) return;
 
-    // The clock and date interval logic is now moved to connectedCallback()
-    // to handle reloads correctly. This section can be removed.
-    /*
-    const self = this;
-    if (this.clock || this.digitalClock) {
-      const inc = 1000;
-      self._runClock();
-      this._clockInterval = setInterval(function() {
-        self._runClock();
-      }, inc);
-    }
-    if (this.date) {
-      const inc = 1000 * 60 * 60;
-      self._runDate();
-      this._dateInterval = setInterval(function() {
-        self._runDate();
-      }, inc);
-    }
-    */
-
+    // Clock, date and weather timers are started in connectedCallback()
+    // so they survive reloads; the active menu item is tracked via the
+    // 'location-changed' listener registered there.
     const self = this; // self is needed for the setTimeouts below
 
     setTimeout(() => {
       self.updateSidebarSize(root);
       self._updateActiveMenu();
-    }, 50); 
-
-    setTimeout(() => {
-      self.updateSidebarSize(root);
-    }, 350);
-
+    }, 50);
+    // The panel is position:fixed with a JS-measured px width, so a single
+    // measurement at load can race the injected `#customSidebar { width: % }`
+    // stylesheet and pin the panel too wide — its content then spills into the
+    // separator until a hard refresh re-rolls the timing. Re-apply the width
+    // whenever the column is (re)laid out so it always tracks the real column.
+    if ('ResizeObserver' in window) {
+      this._resizeObserver = new (window as any).ResizeObserver(() => {
+        self.updateSidebarSize(root);
+      });
+      this._resizeObserver.observe(this);
+    } else {
+      setTimeout(() => {
+        self.updateSidebarSize(root);
+      }, 350);
+    }
     window.addEventListener(
       'resize',
       function() {
@@ -436,44 +1659,18 @@ class SidebarCard extends LitElement {
       true
     );
 
+    if (this.widgetCard) {
+      setTimeout(async () => {
+        const card = Object.assign({ type: this.widgetCard.type }, this.widgetCard.cardOptions);
+        await this.createCard(card, '.widget-card', this.widgetCard);
+      }, 100);
+    }
+
     if (this.bottomCard) {
-      setTimeout(() => {
-        var card = {
-          type: this.bottomCard.type,
-        };
-        card = Object.assign({}, card, this.bottomCard.cardOptions);
-        log2console('firstUpdated', 'Bottom card: ', card);
-        if (!card || typeof card !== 'object' || !card.type) {
-          error2console('firstUpdated', 'Bottom card config error!');
-        } else {
-          let tag = card.type;
-          if (tag.startsWith(this.CUSTOM_TYPE_PREFIX)) tag = tag.substr(this.CUSTOM_TYPE_PREFIX.length);
-          else tag = `hui-${tag}-card`;
-
-          const cardElement = document.createElement(tag);
-          cardElement.setConfig(card);
-          cardElement.hass = hass();
-
-          var bottomSection = this.shadowRoot.querySelector('.bottom');
-          bottomSection.appendChild(cardElement);
-          provideHass(cardElement);
-
-          if (this.bottomCard.cardStyle && this.bottomCard.cardStyle != '') {
-            let style = this.bottomCard.cardStyle;
-            let itterations = 0;
-            let interval = setInterval(function() {
-              if (cardElement && cardElement.shadowRoot) {
-                window.clearInterval(interval);
-                var styleElement = document.createElement('style');
-                styleElement.innerHTML = style;
-                cardElement.shadowRoot.appendChild(styleElement);
-              } else if (++itterations === 10) {
-                window.clearInterval(interval);
-              }
-            }, 100);
-          }
-        }
-      }, 2);
+      setTimeout(async () => {
+        const card = Object.assign({ type: this.bottomCard.type }, this.bottomCard.cardOptions);
+        await this.createCard(card, '.bottom', this.bottomCard);
+      }, 100);
     }
   }
 
@@ -656,8 +1853,9 @@ class SidebarCard extends LitElement {
         // --sidebar-selected-icon-color: #000;
         background-color:  var(--sidebar-background, var(--paper-listbox-background-color, var(--primary-background-color, #fff)));
       }
+
       .sidebar-inner {
-        padding: 20px;
+        padding: 24px 20px;
         display: flex;
         flex-direction: column;
         box-sizing: border-box;
@@ -665,35 +1863,60 @@ class SidebarCard extends LitElement {
         width: 0;
         overflow: hidden auto;
       }
+
       .sidebarMenu {
         list-style: none;
-        margin: 20px 0;
-        padding: 20px 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.2);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        padding: 0;
+        border-top: none;
+        border-bottom: none;
       }
+
       .sidebarMenu li {
-        color: var(--sidebar-text-color, #000);
+        color: var(--sidebar-text-color);
         position: relative;
-        padding: 10px 20px;
+        padding: 14px 16px;
         border-radius: 12px;
-        font-size: 18px;
-        line-height: 24px;
-        font-weight: 300;
+        font-size: 15px;
+        line-height: 20px;
+        font-weight: 500;
         white-space: normal;
-        display: block;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         cursor: pointer;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        margin-bottom: 4px;
+        background: transparent;
+        border: 1px solid transparent;
       }
+
+      .sidebarMenu li:hover {
+        background-color: rgba(255, 255, 255, 0.06);
+        border-color: var(--sidebar-border-color);
+        transform: translateX(2px);
+      }
+
       .sidebarMenu li ha-icon {
-        float: right;
-        color: var(--sidebar-icon-color, #000);
+        color: var(--sidebar-icon-color);
+        --mdc-icon-size: 20px;
+        margin-left: auto;
+        flex-shrink: 0;
+        transition: color 0.3s ease, transform 0.3s ease;
       }
+
+      .sidebarMenu li:hover ha-icon {
+        color: var(--sidebar-selected-icon-color);
+        transform: scale(1.1);
+      }
+
       .sidebarMenu li.active {
         color: var(--sidebar-selected-text-color);
+        background: var(--sidebar-selected-background);
+        border-color: rgba(96, 165, 250, 0.3);
+        box-shadow: 0 4px 12px rgba(96, 165, 250, 0.15);
+        transform: translateX(4px);
       }
-      .sidebarMenu li.active ha-icon {
-        color: var(--sidebar-selected-icon-color, rgb(247, 217, 89));
-      }
+
       .sidebarMenu li.active::before {
         content: '';
         position: absolute;
@@ -705,76 +1928,137 @@ class SidebarCard extends LitElement {
         opacity: 0.12;
         border-radius: 12px;
       }
+
+      .sidebarMenu li.active ha-icon {
+        color: var(--sidebar-selected-icon-color);
+      }
+
+      .sidebarMenu li span {
+        flex: 1;
+        margin-right: 12px;
+      }
+
+      /* Header Styles */
       h1 {
-        margin-top: 0;
-        margin-bottom: 20px;
-        font-size: 32px;
-        line-height: 32px;
-        font-weight: 200;
-        color: var(--sidebar-text-color, #000);
+        margin-top: 15px;
+        margin-bottom: 16px;
+        font-size: 42px;
+        line-height: 48px;
+        font-weight: 300;
+        color: var(--sidebar-text-color);
         cursor: default;
+        letter-spacing: -0.025em;
       }
+
       h1.digitalClock {
-        font-size: 60px;
-        line-height: 60px;
+        font-size: 72px;
+        line-height: 56px;
+        font-weight: 200;
         cursor: default;
+        letter-spacing: -0.03em;
+        color: #ffffff;
+        text-align: center;
       }
+
       h1.digitalClock.with-seconds {
-        font-size: 48px;
+        font-size: 42px;
         line-height: 48px;
         cursor: default;
       }
+
       h1.digitalClock.with-title {
-        margin-bottom: 0;
+        margin-bottom: 8px;
         cursor: default;
       }
+
       h2 {
-        margin: 0;
-        font-size: 26px;
-        line-height: 26px;
-        font-weight: 200;
-        color: var(--sidebar-text-color, #000);
+        margin: 0 0 20px 0;
+        font-size: 16px;
+        line-height: 20px;
+        font-weight: 400;
+        color: var(--sidebar-text-color);
         cursor: default;
+        opacity: 0.8;
       }
+
+      h2.date {
+        font-size: 24px;
+        text-align: center;
+        line-height: 32px;
+      }
+
+      /* Template Section */
       .template {
-        margin: 0;
-        padding: 0;
+        margin: 20px 0;
+        padding: 20px;
         list-style: none;
-        color: var(--sidebar-text-color, #000);
+        color: var(--sidebar-text-color);
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
       }
 
       .template li {
         display: block;
         color: inherit;
-        font-size: 18px;
-        line-height: 24px;
-        font-weight: 300;
+        font-size: 14px;
+        line-height: 20px;
+        font-weight: 400;
         white-space: normal;
+        margin-bottom: 8px;
       }
 
+      .template li:last-child {
+        margin-bottom: 0;
+      }
+
+      /* Weather Widget */
       .weather-widget {
         display: flex;
         align-items: center;
-        margin: 15px 0 20px 0;
-        color: var(--sidebar-text-color, #000);
+        margin: 0 0 24px 0;
+        padding: 20px;
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+        color: var(--sidebar-text-color);
         cursor: default;
+        transition: all 0.3s ease;
+      }
+
+      .weather-widget:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(96, 165, 250, 0.3);
       }
 
       .weather-icon {
-        margin-right: 15px;
-        font-size: 40px;
-        width: 50px;
+        margin-right: 16px;
+        width: 56px;
+        height: 56px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: rgba(96, 165, 250, 0.1);
+        border-radius: 10px;
+        padding: 8px;
+      }
+
+      .meteo-icon {
+        width: 40px;
+        height: 40px;
         display: flex;
         justify-content: center;
         align-items: center;
       }
 
-      .meteo-icon {
-        font-family: 'Weather Icons', sans-serif;
-        font-style: normal;
-        font-weight: normal;
-        display: inline-block;
-        color: var(--sidebar-text-color, #000);
+      .weather-svg-icon {
+        width: 40px !important;
+        height: 40px !important;
+        object-fit: contain;
+        display: block;
+        filter: brightness(0) saturate(100%) invert(65%) sepia(78%) saturate(3893%) hue-rotate(200deg) brightness(104%) contrast(97%);
       }
 
       .weather-info {
@@ -784,47 +2068,31 @@ class SidebarCard extends LitElement {
       }
 
       .weather-temp {
-        font-size: 22px;
-        font-weight: 300;
-        line-height: 24px;
+        font-size: 24px;
+        font-weight: 500;
+        line-height: 28px;
         margin-bottom: 2px;
+        color: #ffffff;
       }
 
       .weather-desc {
-        font-size: 16px;
-        font-weight: 200;
+        font-size: 14px;
+        font-weight: 400;
         opacity: 0.8;
-        line-height: 18px;
+        line-height: 16px;
       }
 
-      /* Weather Icons CSS Classes */
-      .wi-day-sunny:before { content: "\\f00d"; }
-      .wi-day-cloudy:before { content: "\\f002"; }
-      .wi-cloudy:before { content: "\\f013"; }
-      .wi-showers:before { content: "\\f009"; }
-      .wi-rain:before { content: "\\f019"; }
-      .wi-storm-showers:before { content: "\\f00e"; }
-      .wi-lightning:before { content: "\\f016"; }
-      .wi-snow:before { content: "\\f01b"; }
-      .wi-sleet:before { content: "\\f0b5"; }
-      .wi-fog:before { content: "\\f014"; }
-      .wi-hail:before { content: "\\f015"; }
-      .wi-night-clear:before { content: "\\f02e"; }
-      .wi-windy:before { content: "\\f021"; }
-      .wi-strong-wind:before { content: "\\f050"; }
-      .wi-alien:before { content: "\\f075"; }
-      .wi-na:before { content: "\\f07b"; }
-
+      /* Clock Styles */
       .clock {
-        margin: 20px 0;
+        margin: 20px auto 28px auto;
         position: relative;
-        padding-top: calc(100% - 10px);
-        width: calc(100% - 10px);
+        padding-top: 55%;
+        width: 55%;
         border-radius: 100%;
-        background: var(--face-color, #fff);
-        font-family: 'Montserrat';
-        border: 5px solid var(--face-border-color, #fff);
-        box-shadow: inset 2px 3px 8px 0 rgba(0, 0, 0, 0.1);
+        background: rgba(255, 255, 255, 0.08);
+        font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+        border: 2px solid var(--sidebar-border-color);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 2px 8px rgba(0, 0, 0, 0.2);
       }
 
       .clock .wrap {
@@ -841,40 +2109,41 @@ class SidebarCard extends LitElement {
       .clock .hour {
         position: absolute;
         height: 28%;
-        width: 6px;
+        width: 3px;
         margin: auto;
         top: -27%;
         left: 0;
         bottom: 0;
         right: 0;
-        background: var(--clock-hands-color, #000);
+        background: #e1e5e9;
         transform-origin: bottom center;
         transform: rotate(0deg);
-        box-shadow: 0 0 10px 0 rgba(0, 0, 0, 0.4);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         z-index: 1;
+        border-radius: 2px;
       }
 
       .clock .minute {
         position: absolute;
-        height: 41%;
-        width: 4px;
-        top: -38%;
+        height: 38%;
+        width: 2px;
+        top: -35%;
         left: 0;
-        box-shadow: 0 0 10px 0 rgba(0, 0, 0, 0.4);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
         transform: rotate(90deg);
       }
 
       .clock .second {
         position: absolute;
-        top: -48%;
-        height: 48%;
-        width: 2px;
+        top: -45%;
+        height: 45%;
+        width: 1px;
         margin: auto;
         left: 0;
         bottom: 0;
         right: 0;
-        border-radius: 4px;
-        background: var(--clock-seconds-hand-color, #ff4b3e);
+        border-radius: 1px;
+        background: #60a5fa;
         transform-origin: bottom center;
         transform: rotate(180deg);
         z-index: 1;
@@ -886,19 +2155,228 @@ class SidebarCard extends LitElement {
         left: 0;
         right: 0;
         bottom: 0;
-        width: 12px;
-        height: 12px;
+        width: 8px;
+        height: 8px;
         border-radius: 100px;
-        background: var(--clock-middle-background, #fff);
-        border: 2px solid var(--clock-middle-border, #000);
-        border-radius: 100px;
+        background: #60a5fa;
+        border: 2px solid #1a1a1a;
         margin: auto;
-        z-index: 1;
+        z-index: 2;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
       }
 
+      /* Notifications Styles */
+      .notifications-container {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin: 16px 0;
+      }
+
+      .notification-card {
+        background: var(--sidebar-card-background);
+        border-radius: 12px;
+        padding: 16px;
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--sidebar-border-color);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+        transition: all 0.3s ease;
+      }
+
+      .notification-card:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(96, 165, 250, 0.3);
+      }
+
+      .no-notifications {
+        text-align: center;
+        padding: 24px 16px;
+      }
+
+      .no-notifications-title {
+        color: var(--sidebar-text-color);
+        margin: 8px 0 4px 0;
+        font-size: 16px;
+        font-weight: 500;
+      }
+
+      .no-notifications-subtitle {
+        color: var(--sidebar-icon-color);
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .notification-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .notification-title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+      }
+
+      .notification-icon {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+      }
+
+      .notification-icon.error {
+        color: #ef4444;
+      }
+
+      .notification-icon.info {
+        color: #60a5fa;
+      }
+
+      .notification-icon.success {
+        color: #10b981;
+      }
+
+      .notification-icon.warning {
+        color: #f59e0b;
+      }
+
+      .notification-title {
+        color: var(--sidebar-text-color);
+        margin: 0;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .dismiss-icon-btn {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 8px;
+        transition: background-color 0.2s ease;
+        flex-shrink: 0;
+      }
+
+      .dismiss-icon-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .dismiss-icon-btn svg {
+        width: 16px;
+        height: 16px;
+        color: var(--sidebar-icon-color);
+      }
+
+      .dismiss-icon-btn:hover svg {
+        color: var(--sidebar-text-color);
+      }
+
+      .notification-message {
+        color: var(--sidebar-text-color);
+        font-size: 14px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+        opacity: 0.9;
+      }
+
+      .notification-message .bullet-point {
+        margin-left: 16px;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+
+      .notification-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .notification-time {
+        color: var(--sidebar-icon-color);
+        font-size: 12px;
+      }
+
+      .dismiss-btn {
+        background: #60a5fa;
+        color: #ffffff;
+        border: none;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .dismiss-btn:hover {
+        background: #3b82f6;
+        transform: translateY(-1px);
+      }
+
+      .dismiss-all-container {
+        text-align: center;
+        padding-top: 8px;
+      }
+
+      .dismiss-all-btn {
+        background: none;
+        border: none;
+        color: var(--sidebar-icon-color);
+        font-size: 14px;
+        cursor: pointer;
+        transition: color 0.2s ease;
+      }
+
+      .dismiss-all-btn:hover {
+        color: var(--sidebar-text-color);
+      }
+
+
+      /* Widget Card */
+      .widget-card {
+        display: flex;
+        padding: 15px;
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+      }
+
+      /* Bottom Card */
       .bottom {
         display: flex;
         margin-top: auto;
+        padding: 15px;
+        background: var(--sidebar-card-background);
+        border: 1px solid var(--sidebar-border-color);
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+      }
+
+      /* Scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 3px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: rgba(96, 165, 250, 0.3);
+        border-radius: 3px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: rgba(96, 165, 250, 0.5);
       }
     `;
   }
@@ -915,7 +2393,6 @@ function createCSS(sidebarConfig: any, width: number) {
   let contentWidth = 75;
   let sidebarResponsive = false;
   let headerHeightPx = getHeaderHeightPx();
-
   if (sidebarConfig.width) {
     if (typeof sidebarConfig.width == 'number') {
       sidebarWidth = sidebarConfig.width;
