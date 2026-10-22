@@ -1579,16 +1579,20 @@ s.defineLocale("zh-tw",{months:"一月_二月_三月_四月_五月_六月_七月
         right: 4px;
         transform: translateY(-50%);
         flex-direction: column;
+        /* Keep the stack inside the tile when there are 4+ trends. */
+        max-height: calc(100% - 8px);
       }
 
       :host([compact]) .dots button {
         width: 20px;
-        height: 16px;
+        height: auto;
+        flex: 0 1 16px;
+        min-height: 10px;
       }
 
       :host([compact]) .dots button[aria-selected='true']::before {
         width: 6px;
-        height: 12px;
+        height: 10px;
       }
 
       @media (prefers-reduced-motion: reduce) {
