@@ -9,7 +9,7 @@
 // ##########################################################################################
 
 const SIDEBAR_CARD_TITLE = 'SIDEBAR-CARD';
-const SIDEBAR_CARD_VERSION = '0.2.6';
+const SIDEBAR_CARD_VERSION = '0.2.8';
 
 // ##########################################################################################
 // ###   Import dependencies
@@ -467,7 +467,7 @@ class NotificationsElement extends LitElement {
       }
 
       .ns {
-        margin: 20px 0;
+        margin: 0;
       }
 
       .ns-list {
@@ -859,6 +859,15 @@ interface GlanceBadge {
   label_max_length?: number;
 }
 
+type GlanceTone = 'alert' | 'warning' | 'info';
+
+interface GlanceToneThresholds {
+  warn_above?: number;
+  alert_above?: number;
+  warn_below?: number;
+  alert_below?: number;
+}
+
 interface GlanceItem {
   entity: string;
   icon: string;
@@ -866,16 +875,49 @@ interface GlanceItem {
   color?: string;
   show?: GlanceCondition | GlanceConditionType;
   badge?: GlanceBadge;
+  // alerts mode: text for the row; supports {name}, {state} and {unit}
+  label?: string;
+  // alerts mode: fixed tone, or thresholds on the entity's numeric state
+  tone?: GlanceTone | GlanceToneThresholds;
   tap_action?: { action: string; entity?: string; navigation_path?: string; url_path?: string };
+}
+
+type GlancePosition = 'bottom' | 'attention';
+
+interface GlanceBarConfig {
+  position?: GlancePosition;
+  items?: GlanceItem[];
+}
+
+const GLANCE_TONE_RANK: { [key in GlanceTone]: number } = { alert: 0, warning: 1, info: 2 };
+// alerts beyond this fold into a "+N more" row
+const GLANCE_ALERTS_VISIBLE = 2;
+
+// `glanceBar` accepts the original list form (icon bar pinned to the bottom)
+// or { position, items }.
+function normalizeGlanceBar(config: GlanceItem[] | GlanceBarConfig | null | undefined): { position: GlancePosition; items: GlanceItem[] } {
+  if (!config) return { position: 'bottom', items: [] };
+  if (Array.isArray(config)) return { position: 'bottom', items: config };
+  return {
+    position: config.position === 'attention' ? 'attention' : 'bottom',
+    items: Array.isArray(config.items) ? config.items : []
+  };
 }
 
 class GlanceBarElement extends LitElement {
   hass: any;
   items: GlanceItem[] = [];
+  mode: 'icons' | 'alerts' = 'icons';
+  private _expanded = false;
   private _tickInterval: any = null;
 
   static get properties() {
-    return { hass: { type: Object }, items: { type: Array } };
+    return {
+      hass: { type: Object },
+      items: { type: Array },
+      mode: { type: String, reflect: true },
+      _expanded: { attribute: false }
+    };
   }
 
   connectedCallback() {
@@ -982,6 +1024,72 @@ class GlanceBarElement extends LitElement {
     }
   }
 
+  private _tone(item: GlanceItem): GlanceTone {
+    const tone = item.tone;
+    if (!tone) return 'alert';
+    if (typeof tone === 'string') return GLANCE_TONE_RANK[tone] !== undefined ? tone : 'alert';
+    const value = parseFloat(this.hass?.states?.[item.entity]?.state);
+    if (isNaN(value)) return 'info';
+    if ((tone.alert_above !== undefined && value > tone.alert_above) ||
+        (tone.alert_below !== undefined && value < tone.alert_below)) return 'alert';
+    if ((tone.warn_above !== undefined && value > tone.warn_above) ||
+        (tone.warn_below !== undefined && value < tone.warn_below)) return 'warning';
+    return 'info';
+  }
+
+  private _alertLabel(item: GlanceItem): string {
+    const entityState = this.hass.states[item.entity];
+    const name = item.name || entityState?.attributes?.friendly_name || item.entity;
+    if (!item.label) return name;
+    return item.label
+      .replace(/\{name\}/g, name)
+      .replace(/\{state\}/g, entityState?.state ?? '')
+      .replace(/\{unit\}/g, entityState?.attributes?.unit_of_measurement ?? '')
+      .trim();
+  }
+
+  // "how long has the door been open"
+  private _since(lastChanged: string | undefined): string {
+    if (!lastChanged) return '';
+    const mins = Math.floor((Date.now() - new Date(lastChanged).getTime()) / 60000);
+    if (isNaN(mins) || mins < 1) return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+  }
+
+  private _renderAlerts(visible: GlanceItem[]) {
+    const sorted = visible
+      .map((item, index) => ({ item, index, tone: this._tone(item) }))
+      .sort((a, b) => GLANCE_TONE_RANK[a.tone] - GLANCE_TONE_RANK[b.tone] || a.index - b.index);
+    const shown = this._expanded ? sorted : sorted.slice(0, GLANCE_ALERTS_VISIBLE);
+    const hidden = sorted.length - shown.length;
+
+    return html`
+      <div class="alerts" role="list">
+        ${shown.map(({ item, tone }) => {
+          const entityState = this.hass.states[item.entity];
+          const label = this._alertLabel(item);
+          return html`
+            <button class="alert ${tone}" role="listitem" title="${label}"
+              @click="${(e) => this._handleClick(e, item)}">
+              <ha-icon icon="${item.icon}"></ha-icon>
+              <span class="alert-label">${label}</span>
+              <span class="alert-since">${this._since(entityState?.last_changed)}</span>
+            </button>
+          `;
+        })}
+        ${hidden > 0 || this._expanded && sorted.length > GLANCE_ALERTS_VISIBLE
+          ? html`
+              <button class="alert-more" @click="${() => { this._expanded = !this._expanded; }}">
+                ${this._expanded ? 'Show less' : `+${hidden} more alert${hidden === 1 ? '' : 's'}`}
+              </button>
+            `
+          : ''}
+      </div>
+    `;
+  }
+
   protected render() {
     if (!this.hass || !this.items?.length) return html``;
 
@@ -991,6 +1099,8 @@ class GlanceBarElement extends LitElement {
     );
 
     if (!visible.length) return html``;
+
+    if (this.mode === 'alerts') return this._renderAlerts(visible);
 
     return html`
       <div class="glance-bar">
@@ -1118,11 +1228,1200 @@ class GlanceBarElement extends LitElement {
         white-space: nowrap;
         letter-spacing: -0.02em;
       }
+
+      /* ---------- alerts mode: slim rows in the Attention zone ---------- */
+      :host([mode='alerts']) {
+        position: static;
+        margin-top: 0;
+      }
+
+      :host([mode='alerts'])::before {
+        display: none;
+      }
+
+      .alerts {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .alert {
+        --sev: #ef4444;
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 44px;
+        padding: 0 12px 0 14px;
+        box-sizing: border-box;
+        overflow: hidden;
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+        color: var(--sidebar-text-color, #f1f5f9);
+        background: linear-gradient(
+            color-mix(in srgb, var(--sev) 14%, transparent),
+            color-mix(in srgb, var(--sev) 14%, transparent)
+          ),
+          var(--sidebar-notification-background, #18263f);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+      }
+
+      .alert::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: var(--sev);
+      }
+
+      .alert.warning {
+        --sev: #f59e0b;
+      }
+
+      .alert.info {
+        --sev: #3b82f6;
+      }
+
+      .alert:active {
+        filter: brightness(1.15);
+      }
+
+      .alert ha-icon {
+        --mdc-icon-size: 20px;
+        color: var(--sev);
+        flex-shrink: 0;
+        display: flex;
+      }
+
+      .alert-label {
+        flex: 1;
+        min-width: 0;
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .alert-since {
+        font-size: 12px;
+        color: rgba(241, 245, 249, 0.5);
+        flex-shrink: 0;
+      }
+
+      .alert-more {
+        align-self: flex-start;
+        min-height: 32px;
+        padding: 0 8px;
+        background: none;
+        border: none;
+        border-radius: 8px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: rgba(241, 245, 249, 0.72);
+        cursor: pointer;
+      }
+
+      .alert-more:active {
+        background: rgba(255, 255, 255, 0.08);
+      }
     `;
   }
 }
 
 customElements.define('glance-bar-element', GlanceBarElement);
+
+// ##########################################################################################
+// ###   Presence - avatars for person entities, shown on the weather row
+// ##########################################################################################
+
+interface PresenceEntry {
+  entity: string;
+  name?: string;
+}
+
+class PresenceElement extends LitElement {
+  hass: any;
+  entities: (string | PresenceEntry)[] = [];
+  compact = false;
+
+  static get properties() {
+    return { hass: { type: Object }, entities: { type: Array }, compact: { type: Boolean, reflect: true } };
+  }
+
+  private _initials(name: string): string {
+    return name
+      .split(/\s+/)
+      .filter(part => part)
+      .slice(0, 2)
+      .map(part => part[0].toUpperCase())
+      .join('');
+  }
+
+  protected render() {
+    if (!this.hass || !this.entities?.length) return html``;
+
+    const people = this.entities
+      .map(entry => (typeof entry === 'string' ? { entity: entry } : entry))
+      .filter(entry => entry && this.hass.states[entry.entity]);
+    if (!people.length) return html``;
+
+    return html`
+      <div class="people ${people.length > 2 || (this.compact && people.length > 1) ? 'overlap' : ''}">
+        ${people.map(entry => {
+          const st = this.hass.states[entry.entity];
+          const name = entry.name || st.attributes?.friendly_name || entry.entity;
+          const where = st.state === 'home' ? 'home' : st.state === 'not_home' ? 'away' : 'zone';
+          const whereText = where === 'home' ? 'Home' : where === 'away' ? 'Away' : st.state;
+          const picture = st.attributes?.entity_picture;
+          return html`
+            <button class="person ${where}" title="${name}: ${whereText}" aria-label="${name}: ${whereText}"
+              @click="${(e: Event) => { e.stopPropagation(); moreInfo(entry.entity); }}">
+              ${picture
+                ? html`<img src="${picture}" alt="" loading="lazy" />`
+                : html`<span class="initials">${this._initials(name)}</span>`}
+              <span class="dot"></span>
+            </button>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+      }
+
+      .people {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .people.overlap {
+        gap: 0;
+      }
+
+      .people.overlap .person + .person {
+        margin-left: -8px;
+      }
+
+      .person {
+        position: relative;
+        width: 36px;
+        height: 36px;
+        padding: 2px;
+        border: none;
+        border-radius: 50%;
+        background: none;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .person img,
+      .person .initials {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        object-fit: cover;
+        display: block;
+        box-shadow: 0 0 0 2px var(--sidebar-background, #0d1a30);
+      }
+
+      .person .initials {
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--sidebar-text-color, #fff);
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      /* away: dim the avatar so "who's home" reads at a glance */
+      .person.away img,
+      .person.away .initials {
+        opacity: 0.5;
+        filter: grayscale(1);
+      }
+
+      /* compact: fits beside the weather icon and temperature */
+      :host([compact]) .person {
+        width: 34px;
+        height: 34px;
+      }
+
+      :host([compact]) .person img,
+      :host([compact]) .person .initials {
+        width: 30px;
+        height: 30px;
+      }
+
+      :host([compact]) .people.overlap .person + .person {
+        margin-left: -6px;
+      }
+
+      .dot {
+        position: absolute;
+        right: 1px;
+        bottom: 1px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #64748b;
+        box-shadow: 0 0 0 2px var(--sidebar-background, #0d1a30);
+      }
+
+      .person.home .dot {
+        background: #22c55e;
+      }
+
+      .person.zone .dot {
+        background: #3b82f6;
+      }
+    `;
+  }
+}
+
+customElements.define('sidebar-presence', PresenceElement);
+
+// ##########################################################################################
+// ###   Trends - swipeable time charts (one page per metric)
+// ##########################################################################################
+
+interface TrendBand {
+  max: number;
+  label: string;
+  short?: string;
+  color: string;
+}
+
+interface TrendSeriesConfig {
+  entity: string;
+  name?: string;
+}
+
+interface TrendItemConfig {
+  name?: string;
+  entity?: string;
+  entities?: (string | TrendSeriesConfig)[];
+  bands?: 'aqi' | TrendBand[];
+  min?: number;
+  max?: number;
+}
+
+interface TrendsConfig {
+  ranges?: string[];
+  autoAdvance?: number;
+  items?: TrendItemConfig[];
+}
+
+interface TrendPoint {
+  t: number;
+  v: number;
+}
+
+// EPA AQI categories
+const TREND_AQI_BANDS: TrendBand[] = [
+  { max: 50, label: 'Good', color: '#0ca30c' },
+  { max: 100, label: 'Moderate', color: '#fab219' },
+  { max: 150, label: 'Unhealthy for sensitive groups', short: 'Sensitive', color: '#ec835a' },
+  { max: 300, label: 'Unhealthy', color: '#d03b3b' },
+  { max: 500, label: 'Hazardous', color: '#9d2b2b' }
+];
+
+// Categorical slots validated together on the dark card surface (#18263f).
+// Lines cap at three series; a single series with bands uses neutral ink so
+// only the bands carry status colour.
+const TREND_SERIES_COLORS = ['#3987e5', '#d95926', '#199e70'];
+const TREND_NEUTRAL_LINE = '#c9d4e3';
+const TREND_MAX_SERIES = 3;
+const TREND_MAX_POINTS = 240; // per series, after bucketing
+const TREND_HOLD_MS = 250; // press-and-hold before scrubbing on touch
+const TREND_SWIPE_SLOP = 8;
+const TREND_AUTO_PAUSE_MS = 60000;
+
+function parseTrendRange(range: string): number {
+  const m = /^(\d+)\s*([hd])$/i.exec((range || '').trim());
+  if (!m) return 24 * 3600000;
+  return parseInt(m[1], 10) * (m[2].toLowerCase() === 'd' ? 24 : 1) * 3600000;
+}
+
+// Average points into fixed time buckets so a 7-day window stays light.
+function bucketTrend(points: TrendPoint[], start: number, end: number, buckets: number): TrendPoint[] {
+  if (points.length <= buckets) return points;
+  const size = (end - start) / buckets;
+  const sums = new Array(buckets).fill(0);
+  const counts = new Array(buckets).fill(0);
+  points.forEach(p => {
+    const i = Math.min(buckets - 1, Math.max(0, Math.floor((p.t - start) / size)));
+    sums[i] += p.v;
+    counts[i] += 1;
+  });
+  const out: TrendPoint[] = [];
+  for (let i = 0; i < buckets; i++) {
+    if (counts[i]) out.push({ t: start + (i + 0.5) * size, v: sums[i] / counts[i] });
+  }
+  // keep the true latest reading as the last point
+  const last = points[points.length - 1];
+  if (out.length && last.t > out[out.length - 1].t) out.push(last);
+  return out;
+}
+
+class TrendsElement extends LitElement {
+  hass: any;
+  config: TrendsConfig | null = null;
+  compact = false;
+
+  private _page = 0;
+  private _rangeIndex = 0;
+  private _data: Map<string, TrendPoint[]> = new Map();
+  private _scrub: { page: number; x: number } | null = null;
+  private _dragOffset: number | null = null;
+
+  private _unsubscribe: (() => void) | null = null;
+  private _subscribing = false;
+  private _subscribedKey = '';
+  private _gesture: any = null;
+  private _autoTimer: number | null = null;
+  private _pausedUntil = 0;
+  private _attentionObserver: any = null;
+  private _sizeObserver: any = null;
+  private _clockTimer: number | null = null;
+  private _chartWidth = 200;
+  private _fullWidth = 200;
+  private _compactWidth = 120;
+
+  static get properties() {
+    return {
+      hass: { type: Object },
+      config: { type: Object },
+      compact: { type: Boolean, reflect: true },
+      _page: { attribute: false },
+      _rangeIndex: { attribute: false },
+      _scrub: { attribute: false },
+      _dragOffset: { attribute: false }
+    };
+  }
+
+  /* ---------------- config helpers ---------------- */
+
+  private get _items(): TrendItemConfig[] {
+    return (this.config?.items || []).filter(item => item && (item.entity || (item.entities && item.entities.length)));
+  }
+
+  private get _ranges(): string[] {
+    const r = this.config?.ranges;
+    return Array.isArray(r) && r.length ? r : ['24h', '7d'];
+  }
+
+  private _series(item: TrendItemConfig): TrendSeriesConfig[] {
+    const list = item.entities && item.entities.length ? item.entities : [item.entity as string];
+    return list
+      .map(e => (typeof e === 'string' ? { entity: e } : e))
+      .filter(e => e && e.entity)
+      .slice(0, TREND_MAX_SERIES);
+  }
+
+  private _bands(item: TrendItemConfig): TrendBand[] | null {
+    if (item.bands === 'aqi') return TREND_AQI_BANDS;
+    if (Array.isArray(item.bands) && item.bands.length) return [...item.bands].sort((a, b) => a.max - b.max);
+    return null;
+  }
+
+  private _entityIds(): string[] {
+    const ids = new Set<string>();
+    this._items.forEach(item => this._series(item).forEach(s => ids.add(s.entity)));
+    return Array.from(ids);
+  }
+
+  /* ---------------- lifecycle ---------------- */
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._startAuto();
+    this._clockTimer = window.setInterval(() => this.requestUpdate(), 60000);
+    // compact while the Attention zone has something in it
+    window.setTimeout(() => this._watchAttention(), 0);
+    // re-measure when the sidebar width changes (it is set from JS after load)
+    if ('ResizeObserver' in window) {
+      this._sizeObserver = new (window as any).ResizeObserver(() => this.requestUpdate());
+      this._sizeObserver.observe(this);
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._unsubscribeHistory();
+    if (this._autoTimer) window.clearInterval(this._autoTimer);
+    this._autoTimer = null;
+    if (this._clockTimer) window.clearInterval(this._clockTimer);
+    this._clockTimer = null;
+    if (this._attentionObserver) this._attentionObserver.disconnect();
+    this._attentionObserver = null;
+    if (this._sizeObserver) this._sizeObserver.disconnect();
+    this._sizeObserver = null;
+  }
+
+  protected updated(changed): void {
+    const key = `${this._entityIds().join(',')}|${this._ranges[this._rangeIndex] || ''}`;
+    if ((changed.has('hass') || changed.has('config') || changed.has('_rangeIndex')) &&
+        this.hass?.connection && key !== this._subscribedKey && !this._subscribing) {
+      this._subscribeHistory(key);
+    }
+    if (changed.has('config')) {
+      this._startAuto();
+      if (this._page >= this._items.length) this._page = 0;
+    }
+    // draw at the real pixel width so markers stay round and labels undistorted
+    const chart = this.shadowRoot?.querySelector('.page .chart, .page .empty') as HTMLElement | null;
+    const w = chart ? chart.clientWidth : 0;
+    if (w > 0) {
+      if (this.compact) this._compactWidth = w;
+      else this._fullWidth = w;
+      const want = this.compact ? this._compactWidth : this._fullWidth;
+      if (Math.abs(want - this._chartWidth) > 1) {
+        this._chartWidth = want;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private _watchAttention(): void {
+    const root = this.getRootNode() as any;
+    const attention = root && root.querySelector ? root.querySelector('.attention') : null;
+    if (!attention || !('ResizeObserver' in window)) return;
+    const check = () => {
+      const cs = getComputedStyle(attention);
+      const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      const busy = attention.getBoundingClientRect().height - padding > 4;
+      if (busy !== this.compact) this.compact = busy;
+    };
+    this._attentionObserver = new (window as any).ResizeObserver(check);
+    this._attentionObserver.observe(attention);
+    check();
+  }
+
+  /* ---------------- history ---------------- */
+
+  private _unsubscribeHistory(): void {
+    if (this._unsubscribe) {
+      try {
+        this._unsubscribe();
+      } catch (_e) {
+        /* connection already closed */
+      }
+    }
+    this._unsubscribe = null;
+    this._subscribedKey = '';
+  }
+
+  // history/stream sends the window's history first, then each new state as it
+  // happens, so the charts stay live without polling.
+  private async _subscribeHistory(key: string): Promise<void> {
+    const ids = this._entityIds();
+    this._unsubscribeHistory();
+    this._data = new Map();
+    if (!ids.length) return;
+    this._subscribing = true;
+    const span = parseTrendRange(this._ranges[this._rangeIndex]);
+    try {
+      this._unsubscribe = await this.hass.connection.subscribeMessage(
+        (msg: any) => this._onHistory(msg),
+        {
+          type: 'history/stream',
+          entity_ids: ids,
+          start_time: new Date(Date.now() - span).toISOString(),
+          minimal_response: true,
+          no_attributes: true,
+          significant_changes_only: false
+        }
+      );
+      this._subscribedKey = key;
+    } catch (err) {
+      console.warn('sidebar-card: could not subscribe to history', err);
+    } finally {
+      this._subscribing = false;
+    }
+  }
+
+  private _onHistory(msg: any): void {
+    const states = msg && msg.states;
+    if (!states) return;
+    Object.keys(states).forEach(id => {
+      const list = this._data.get(id) || [];
+      (states[id] || []).forEach((s: any) => {
+        const v = parseFloat(s.s !== undefined ? s.s : s.state);
+        const ts = s.lu !== undefined ? s.lu * 1000
+          : s.lc !== undefined ? s.lc * 1000
+          : new Date(s.last_updated || s.last_changed).getTime();
+        if (!isNaN(v) && !isNaN(ts)) list.push({ t: ts, v });
+      });
+      list.sort((a, b) => a.t - b.t);
+      this._data.set(id, list);
+    });
+    this.requestUpdate();
+  }
+
+  private _points(entity: string, start: number, end: number): TrendPoint[] {
+    const all = (this._data.get(entity) || []).filter(p => p.t >= start);
+    // extend the line to "now" with the current state
+    const live = parseFloat(this.hass?.states?.[entity]?.state);
+    if (!isNaN(live) && (!all.length || all[all.length - 1].t < end - 60000)) all.push({ t: end, v: live });
+    return bucketTrend(all, start, end, TREND_MAX_POINTS);
+  }
+
+  /* ---------------- paging ---------------- */
+
+  private _go(page: number): void {
+    const n = this._items.length;
+    this._page = n ? (page + n) % n : 0;
+    this._dragOffset = null;
+  }
+
+  private _pauseAuto(): void {
+    this._pausedUntil = Date.now() + TREND_AUTO_PAUSE_MS;
+  }
+
+  private _startAuto(): void {
+    if (this._autoTimer) window.clearInterval(this._autoTimer);
+    this._autoTimer = null;
+    const secs = Number(this.config?.autoAdvance || 0);
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!secs || secs < 3 || reduced) return;
+    this._autoTimer = window.setInterval(() => {
+      if (Date.now() < this._pausedUntil || this._gesture || this._items.length < 2) return;
+      this._go(this._page + 1);
+    }, secs * 1000);
+  }
+
+  private _setRange(i: number): void {
+    this._pauseAuto();
+    if (i !== this._rangeIndex) this._rangeIndex = i;
+  }
+
+  /* ---------------- gestures: swipe pages, hold to scrub ---------------- */
+
+  private _chartAt(e: PointerEvent): HTMLElement | null {
+    return (e.composedPath() as HTMLElement[]).find(n => n && n.classList && n.classList.contains('chart')) || null;
+  }
+
+  private _scrubAt(chart: HTMLElement, clientX: number): void {
+    const rect = chart.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+    this._scrub = { page: Number(chart.dataset.page), x };
+  }
+
+  private _onPointerDown(e: PointerEvent): void {
+    if ((e.composedPath() as HTMLElement[]).some(n => n && n.classList && n.classList.contains('dots'))) return;
+    this._pauseAuto();
+    const track = e.currentTarget as HTMLElement;
+    try {
+      track.setPointerCapture(e.pointerId);
+    } catch (_e) {
+      /* pointer already gone */
+    }
+    const chart = this._chartAt(e);
+    this._gesture = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), mode: 'pending', chart, width: track.clientWidth };
+    if (chart && e.pointerType !== 'mouse' && !this.compact) {
+      this._gesture.hold = window.setTimeout(() => {
+        if (this._gesture && this._gesture.mode === 'pending') {
+          this._gesture.mode = 'scrub';
+          this._scrubAt(chart, this._gesture.x0);
+        }
+      }, TREND_HOLD_MS);
+    }
+  }
+
+  private _onPointerMove(e: PointerEvent): void {
+    const g = this._gesture;
+    if (!g) {
+      // mouse hover reads values directly
+      if (e.pointerType === 'mouse' && !this.compact) {
+        const chart = this._chartAt(e);
+        if (chart) this._scrubAt(chart, e.clientX);
+        else if (this._scrub) this._scrub = null;
+      }
+      return;
+    }
+    if (e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x0;
+    const dy = e.clientY - g.y0;
+    if (g.mode === 'pending' && Math.abs(dx) > TREND_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
+      g.mode = 'swipe';
+      window.clearTimeout(g.hold);
+      this._scrub = null;
+    }
+    if (g.mode === 'swipe') {
+      const atEdge = (this._page === 0 && dx > 0) || (this._page === this._items.length - 1 && dx < 0);
+      this._dragOffset = atEdge ? dx * 0.3 : dx;
+    } else if (g.mode === 'scrub' && g.chart) {
+      this._scrubAt(g.chart, e.clientX);
+    }
+  }
+
+  private _onPointerUp(e: PointerEvent): void {
+    const g = this._gesture;
+    if (!g || e.pointerId !== g.id) return;
+    window.clearTimeout(g.hold);
+    if (g.mode === 'swipe') {
+      const dx = e.clientX - g.x0;
+      const velocity = dx / Math.max(1, performance.now() - g.t0);
+      const flick = Math.abs(velocity) > 0.35;
+      const far = Math.abs(dx) > g.width * 0.25;
+      const next = this._page + (dx < 0 ? 1 : -1);
+      if ((flick || far) && next >= 0 && next < this._items.length) this._go(next);
+      else this._dragOffset = null;
+    } else if (g.mode === 'scrub' || e.pointerType !== 'mouse') {
+      this._scrub = null;
+    }
+    this._gesture = null;
+  }
+
+  private _onKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'ArrowRight') {
+      this._pauseAuto();
+      this._go(this._page + 1);
+    } else if (e.key === 'ArrowLeft') {
+      this._pauseAuto();
+      this._go(this._page - 1);
+    }
+  }
+
+  /* ---------------- formatting ---------------- */
+
+  private _unit(entity: string): string {
+    return this.hass?.states?.[entity]?.attributes?.unit_of_measurement || '';
+  }
+
+  private _fmt(v: number, entity: string, precise = false): string {
+    if (v === undefined || v === null || isNaN(v)) return '–';
+    const unit = this._unit(entity);
+    if (unit.indexOf('°') === 0) return `${precise ? v.toFixed(1) : Math.round(v)}°`;
+    const digits = precise && Math.abs(v) < 100 ? 1 : 0;
+    const n = v.toFixed(digits);
+    return unit && unit.toLowerCase() !== 'aqi' ? `${n} ${unit}` : n;
+  }
+
+  private _time(t: number, spanMs: number): string {
+    return new Date(t).toLocaleString(this.hass?.language || undefined,
+      spanMs <= 36 * 3600000 ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric' });
+  }
+
+  private _band(bands: TrendBand[], v: number): TrendBand {
+    return bands.find(b => v <= b.max) || bands[bands.length - 1];
+  }
+
+  /* ---------------- rendering ---------------- */
+
+  private _renderChart(item: TrendItemConfig, pageIndex: number, start: number, end: number, spanMs: number) {
+    const series = this._series(item);
+    const bands = this._bands(item);
+    const lines = series.map((s, i) => ({
+      ...s,
+      color: series.length === 1 && bands ? TREND_NEUTRAL_LINE : TREND_SERIES_COLORS[i],
+      points: this._points(s.entity, start, end),
+      label: s.name || this.hass?.states?.[s.entity]?.attributes?.friendly_name || s.entity
+    }));
+    const values = lines.reduce((acc, l) => acc.concat(l.points.map(p => p.v)), [] as number[]);
+    if (!values.length) return html`<div class="empty">No history yet</div>`;
+
+    const W = Math.max(60, Math.round(this.compact ? this._compactWidth : this._fullWidth));
+    const H = this.compact ? 26 : 64;
+    const padT = this.compact ? 3 : 6;
+    const padB = this.compact ? 3 : 4;
+    let lo = item.min !== undefined ? item.min : Math.min(...values);
+    let hi = item.max !== undefined ? item.max : Math.max(...values);
+    if (bands) {
+      lo = item.min !== undefined ? item.min : 0;
+      // always show the first two bands, and grow to fit the data
+      const peakValue = Math.max(...values);
+      hi = item.max !== undefined ? item.max : Math.max(peakValue * 1.1, bands.length > 1 ? bands[1].max + 10 : peakValue * 1.1);
+    } else if (item.min === undefined && item.max === undefined) {
+      const pad = (hi - lo || 1) * 0.12;
+      lo -= pad;
+      hi += pad;
+    }
+    const x = (t: number) => ((t - start) / (end - start)) * (W - 6);
+    const y = (v: number) => padT + (1 - (v - lo) / (hi - lo || 1)) * (H - padT - padB);
+
+    const bandShapes: any[] = [];
+    if (bands && !this.compact) {
+      let prev = lo;
+      for (const b of bands) {
+        const top = Math.min(b.max, hi);
+        if (top > prev) {
+          bandShapes.push(svg`<rect x="0" width="${W - 6}" y="${y(top)}" height="${Math.max(0, y(prev) - y(top))}" fill="${b.color}" fill-opacity="0.09"></rect>`);
+          if (b.max < hi) {
+            bandShapes.push(svg`<line x1="0" x2="${W - 6}" y1="${y(b.max)}" y2="${y(b.max)}" stroke="${b.color}" stroke-opacity="0.35" stroke-dasharray="2 3"></line>`);
+            bandShapes.push(svg`<text x="${W - 8}" y="${y(b.max) - 3}" text-anchor="end" class="band-label">${b.max}</text>`);
+          }
+        }
+        prev = top;
+        if (top >= hi) break;
+      }
+    }
+
+    const scrub = this._scrub && this._scrub.page === pageIndex && !this.compact ? this._scrub : null;
+    let tip = html``;
+    let cross = svg``;
+    if (scrub && lines[0].points.length) {
+      const t = start + scrub.x * (end - start);
+      const nearest = (pts: TrendPoint[]) => pts.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+      const at = lines.map(l => (l.points.length ? nearest(l.points) : null));
+      const X = x(at[0] ? at[0].t : t);
+      cross = svg`
+        <line class="hair" x1="${X}" x2="${X}" y1="0" y2="${H}"></line>
+        ${at.map((p, i) => (p ? svg`<circle cx="${x(p.t)}" cy="${y(p.v)}" r="4" fill="${lines[i].color}" stroke="var(--trend-surface)" stroke-width="2"></circle>` : svg``))}
+      `;
+      const leftPct = Math.max(22, Math.min(78, (X / (W - 6)) * 100));
+      tip = html`
+        <div class="tip" style="left: ${leftPct}%">
+          <div class="when">${this._time(at[0] ? at[0].t : t, spanMs)}</div>
+          ${at.map((p, i) => (p ? html`
+            <div class="tip-row"><i style="background: ${lines[i].color}"></i>
+              ${lines.length > 1 ? `${lines[i].label} ` : ''}${this._fmt(p.v, lines[i].entity, true)}${bands && lines.length === 1 ? ` · ${this._band(bands, p.v).short || this._band(bands, p.v).label}` : ''}
+            </div>` : ''))}
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="chart" data-page="${pageIndex}">
+        <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img"
+          aria-label="${item.name || lines[0].label}, last ${this._ranges[this._rangeIndex]}">
+          ${bandShapes}
+          ${bands || this.compact ? svg`` : svg`<line x1="0" x2="${W - 6}" y1="${H / 2}" y2="${H / 2}" class="grid"></line>`}
+          ${lines.map(l => {
+            if (!l.points.length) return svg``;
+            const d = l.points.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
+            const last = l.points[l.points.length - 1];
+            return svg`
+              <path d="${d}" fill="none" stroke="${l.color}" stroke-width="${this.compact ? 1.75 : 2}"
+                stroke-linejoin="round" stroke-linecap="round"></path>
+              <circle cx="${x(last.t)}" cy="${y(last.v)}" r="${this.compact ? 3 : 4}" fill="${l.color}"
+                stroke="var(--trend-surface)" stroke-width="2"></circle>
+            `;
+          })}
+          ${cross}
+        </svg>
+        ${tip}
+      </div>
+    `;
+  }
+
+  private _renderPage(item: TrendItemConfig, index: number, start: number, end: number, spanMs: number) {
+    const series = this._series(item);
+    const main = series[0];
+    const st = this.hass?.states?.[main.entity];
+    const now = parseFloat(st?.state);
+    const bands = this._bands(item);
+    const name = item.name || st?.attributes?.friendly_name || main.entity;
+    const pts = this._points(main.entity, start, end);
+    const vals = pts.map(p => p.v);
+    const hi = vals.length ? Math.max(...vals) : NaN;
+    const lo = vals.length ? Math.min(...vals) : NaN;
+    const band = bands && !isNaN(now) ? this._band(bands, now) : null;
+    const peak = bands && pts.length ? pts.reduce((a, b) => (b.v > a.v ? b : a)) : null;
+
+    return html`
+      <div class="page" role="tabpanel" aria-hidden="${index !== this._page ? 'true' : 'false'}" aria-label="${name}">
+        <div class="head">
+          <div>
+            <div class="name">${name}</div>
+            <div class="value">${this._fmt(now, main.entity)}</div>
+          </div>
+          ${this.compact
+            ? ''
+            : band
+              ? html`<span class="status"><i style="background: ${band.color}"></i>${band.short || band.label}</span>`
+              : html`<span class="sub">H ${this._fmt(hi, main.entity)} · L ${this._fmt(lo, main.entity)}</span>`}
+        </div>
+        ${this.compact
+          ? ''
+          : series.length > 1
+            ? html`<div class="sub keys">${series.map((s, i) => html`
+                <span class="key"><i style="background: ${TREND_SERIES_COLORS[i]}"></i>${s.name || this.hass?.states?.[s.entity]?.attributes?.friendly_name || s.entity}${i > 0 ? ` ${this._fmt(parseFloat(this.hass?.states?.[s.entity]?.state), s.entity)}` : ''}</span>`)}
+              </div>`
+            : peak
+              ? html`<div class="sub">Peak ${this._fmt(peak.v, main.entity)} at ${this._time(peak.t, spanMs)}</div>`
+              : ''}
+        ${this._renderChart(item, index, start, end, spanMs)}
+        ${this.compact ? '' : html`<div class="axis"><span>${this._ranges[this._rangeIndex]} ago</span><span>now</span></div>`}
+      </div>
+    `;
+  }
+
+  protected render() {
+    const items = this._items;
+    if (!this.hass || !items.length) return html``;
+    const ranges = this._ranges;
+    const spanMs = parseTrendRange(ranges[this._rangeIndex]);
+    const end = Date.now();
+    const start = end - spanMs;
+    const offset = this._dragOffset !== null ? `calc(${-this._page * 100}% + ${this._dragOffset}px)` : `${-this._page * 100}%`;
+
+    return html`
+      <section class="trends" aria-label="Trends">
+        <div class="trends-head">
+          <span class="label">Trends</span>
+          ${ranges.length > 1
+            ? html`
+                <div class="range" role="group" aria-label="Time range">
+                  ${ranges.map((r, i) => html`
+                    <button aria-pressed="${i === this._rangeIndex ? 'true' : 'false'}" @click="${() => this._setRange(i)}">${r}</button>`)}
+                </div>
+              `
+            : ''}
+        </div>
+        <div class="tile" role="region" aria-roledescription="carousel" aria-label="Trends" tabindex="0"
+          @keydown="${this._onKeyDown}">
+          <div class="track ${this._dragOffset !== null ? 'dragging' : ''}" style="transform: translateX(${offset})"
+            @pointerdown="${this._onPointerDown}" @pointermove="${this._onPointerMove}"
+            @pointerup="${this._onPointerUp}" @pointercancel="${this._onPointerUp}"
+            @pointerleave="${(e: PointerEvent) => { if (e.pointerType === 'mouse' && !this._gesture) this._scrub = null; }}">
+            ${items.map((item, i) => this._renderPage(item, i, start, end, spanMs))}
+          </div>
+          ${items.length > 1
+            ? html`
+                <div class="dots" role="tablist">
+                  ${items.map((item, i) => html`
+                    <button role="tab" aria-label="${item.name || this._series(item)[0].entity}"
+                      aria-selected="${i === this._page ? 'true' : 'false'}"
+                      @click="${() => { this._pauseAuto(); this._go(i); }}"></button>`)}
+                </div>
+              `
+            : ''}
+        </div>
+      </section>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+        --trend-surface: var(--sidebar-notification-background, #18263f);
+        --trend-text: var(--sidebar-text-color, #f1f5f9);
+        --trend-text-2: rgba(241, 245, 249, 0.72);
+        --trend-text-3: rgba(241, 245, 249, 0.5);
+        --trend-border: rgba(255, 255, 255, 0.08);
+      }
+
+      .trends {
+        margin-top: 18px;
+      }
+
+      .trends-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 2px 8px;
+      }
+
+      .label {
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--trend-text-3);
+      }
+
+      .range {
+        display: flex;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 2px;
+      }
+
+      .range button {
+        border: none;
+        background: none;
+        color: var(--trend-text-2);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 6px 10px;
+        min-height: 28px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .range button[aria-pressed='true'] {
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--trend-text);
+      }
+
+      .tile {
+        position: relative;
+        overflow: hidden;
+        background: var(--trend-surface);
+        border: 1px solid var(--trend-border);
+        border-radius: 14px;
+        outline: none;
+        color: var(--trend-text);
+      }
+
+      .tile:focus-visible {
+        box-shadow: 0 0 0 2px #3b82f6;
+      }
+
+      .track {
+        display: flex;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+
+      .track.dragging {
+        transition: none;
+      }
+
+      .page {
+        flex: 0 0 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        padding: 12px 12px 10px;
+      }
+
+      .head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .name {
+        font-size: 12px;
+        color: var(--trend-text-3);
+      }
+
+      .value {
+        font-size: 26px;
+        font-weight: 600;
+        line-height: 1.1;
+        margin-top: 2px;
+      }
+
+      .sub {
+        font-size: 12px;
+        color: var(--trend-text-2);
+        margin-top: 2px;
+      }
+
+      .keys {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .key,
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .key i {
+        width: 10px;
+        height: 2px;
+        border-radius: 1px;
+        display: inline-block;
+      }
+
+      .status {
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .status i {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+
+      .chart {
+        position: relative;
+        margin-top: 8px;
+      }
+
+      .chart svg {
+        display: block;
+        max-width: 100%;
+        overflow: visible;
+      }
+
+      .grid {
+        stroke: rgba(255, 255, 255, 0.07);
+      }
+
+      .hair {
+        stroke: var(--trend-text-3);
+        stroke-width: 1;
+      }
+
+      .band-label {
+        font-size: 10px;
+        fill: var(--trend-text-3);
+      }
+
+      .empty {
+        margin-top: 8px;
+        height: 64px;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        color: var(--trend-text-3);
+      }
+
+      .axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--trend-text-3);
+        margin-top: 2px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .tip {
+        position: absolute;
+        top: -6px;
+        transform: translate(-50%, -100%);
+        background: #0b1424;
+        border: 1px solid var(--trend-border);
+        border-radius: 8px;
+        padding: 6px 8px;
+        font-size: 12px;
+        white-space: nowrap;
+        pointer-events: none;
+        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+        z-index: 2;
+      }
+
+      .when {
+        color: var(--trend-text-3);
+        margin-bottom: 2px;
+      }
+
+      .tip-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .tip-row i {
+        width: 10px;
+        height: 2px;
+        border-radius: 1px;
+        display: inline-block;
+      }
+
+      .dots {
+        position: absolute;
+        bottom: 6px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        z-index: 3;
+      }
+
+      .dots button {
+        width: 22px;
+        height: 22px;
+        border: none;
+        background: none;
+        padding: 0;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+      }
+
+      .dots button::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--trend-text-3);
+        opacity: 0.5;
+        transition: width 0.2s ease, opacity 0.2s ease;
+      }
+
+      .dots button[aria-selected='true']::before {
+        width: 14px;
+        opacity: 1;
+        background: var(--trend-text);
+      }
+
+      /* ---------- compact: one row while the Attention zone needs room ---------- */
+      :host([compact]) .page {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 28px 8px 12px;
+      }
+
+      :host([compact]) .head {
+        display: block;
+        flex: 0 0 auto;
+        min-width: 70px;
+      }
+
+      :host([compact]) .value {
+        font-size: 17px;
+      }
+
+      :host([compact]) .chart {
+        flex: 1;
+        margin-top: 0;
+        min-width: 0;
+      }
+
+      :host([compact]) .empty {
+        height: 26px;
+        margin-top: 0;
+        flex: 1;
+      }
+
+      :host([compact]) .dots {
+        top: 50%;
+        bottom: auto;
+        left: auto;
+        right: 4px;
+        transform: translateY(-50%);
+        flex-direction: column;
+      }
+
+      :host([compact]) .dots button {
+        width: 20px;
+        height: 16px;
+      }
+
+      :host([compact]) .dots button[aria-selected='true']::before {
+        width: 6px;
+        height: 12px;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .track,
+        .dots button::before {
+          transition: none;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define('sidebar-trends', TrendsElement);
 
 
 const weatherIconUrls = {
@@ -1174,6 +2473,9 @@ class SidebarCard extends LitElement {
   CUSTOM_TYPE_PREFIX = 'custom:';
   notifications = false; // Add this line
   glanceBar: GlanceItem[] | null = null;
+  glancePosition: GlancePosition = 'bottom';
+  presence: (string | PresenceEntry)[] = [];
+  trends: TrendsConfig | null = null;
   private _resizeObserver: any = null;
 
   // Markus:
@@ -1356,7 +2658,15 @@ class SidebarCard extends LitElement {
     this.bottomCard = this.config.bottomCard ? this.config.bottomCard : null;
     this.updateMenu = this.config.hasOwnProperty('updateMenu') ? this.config.updateMenu : true;
     this.notifications = this.config.notifications ? this.config.notifications : false;
-    this.glanceBar = this.config.glanceBar ? this.config.glanceBar : null;
+    const glance = normalizeGlanceBar(this.config.glanceBar);
+    this.glanceBar = glance.items.length ? glance.items : null;
+    this.glancePosition = glance.position;
+    this.presence = Array.isArray(this.config.presence) ? this.config.presence : [];
+    const showPresence = this.presence.length > 0;
+    const glanceInAttention = !!this.glanceBar && this.glancePosition === 'attention';
+    this.trends = this.config.trends && Array.isArray(this.config.trends.items) && this.config.trends.items.length
+      ? this.config.trends
+      : null;
 
     return html`
       ${addStyle
@@ -1397,7 +2707,7 @@ class SidebarCard extends LitElement {
           : html``}
         ${this.weather && this.weatherEntity
           ? html`
-              <div class="weather-widget">
+              <div class="weather-widget${showPresence ? ' with-presence' : ''}">
                 <div class="weather-icon">
                   <i class="meteo-icon"></i>
                 </div>
@@ -1405,9 +2715,14 @@ class SidebarCard extends LitElement {
                   <span class="weather-temp"></span>
                   <span class="weather-desc"></span>
                 </div>
+                ${showPresence
+                  ? html`<sidebar-presence class="in-weather" compact .hass=${this.hass} .entities=${this.presence}></sidebar-presence>`
+                  : html``}
               </div>
             `
-          : html``}
+          : showPresence
+            ? html`<sidebar-presence class="standalone" .hass=${this.hass} .entities=${this.presence}></sidebar-presence>`
+            : html``}
         ${sidebarMenu && sidebarMenu.length > 0
           ? html`
               <ul class="sidebarMenu">
@@ -1427,6 +2742,9 @@ class SidebarCard extends LitElement {
               </ul>
             `
           : html``}
+        ${this.trends
+          ? html`<sidebar-trends .hass=${this.hass} .config=${this.trends}></sidebar-trends>`
+          : html``}
         ${this.widgetCard
           ? html`
               <div class="widget-card"></div>
@@ -1443,9 +2761,16 @@ class SidebarCard extends LitElement {
               </ul>
             `
           : html``}
-        ${this.notifications
+        ${this.notifications || glanceInAttention
           ? html`
-              <notifications-element .hass=${this.hass}></notifications-element>
+              <div class="attention">
+                ${glanceInAttention
+                  ? html`<glance-bar-element mode="alerts" .hass=${this.hass} .items=${this.glanceBar}></glance-bar-element>`
+                  : html``}
+                ${this.notifications
+                  ? html`<notifications-element .hass=${this.hass}></notifications-element>`
+                  : html``}
+              </div>
             `
           : html``}
         ${this.bottomCard
@@ -1453,7 +2778,7 @@ class SidebarCard extends LitElement {
               <div class="bottom"></div>
             `
           : html``}
-        ${this.glanceBar && this.glanceBar.length > 0
+        ${this.glanceBar && !glanceInAttention
           ? html`<glance-bar-element .hass=${this.hass} .items=${this.glanceBar}></glance-bar-element>`
           : html``}
       </div>
@@ -2347,6 +3672,46 @@ class SidebarCard extends LitElement {
         border: 1px solid var(--sidebar-border-color);
         border-radius: 12px;
         backdrop-filter: blur(10px);
+      }
+
+      /* Presence on the weather row */
+      .weather-widget.with-presence {
+        padding: 16px;
+      }
+
+      .weather-widget.with-presence .weather-icon {
+        width: 48px;
+        height: 48px;
+        margin-right: 12px;
+        box-sizing: border-box;
+      }
+
+      .weather-widget sidebar-presence.in-weather {
+        margin-left: auto;
+        padding-left: 8px;
+        flex-shrink: 0;
+      }
+
+      sidebar-presence.standalone {
+        margin: 0 0 24px 0;
+      }
+
+      /* Attention zone: live alerts + notifications. Anchored to the bottom so
+         it grows upward and the clock and menu above never move. It has no
+         position of its own: the notification panel must resolve against
+         .sidebar-inner. */
+      .attention {
+        margin-top: auto;
+        padding-top: 16px;
+        padding-bottom: 8px;
+      }
+
+      .attention ~ .bottom {
+        margin-top: 12px;
+      }
+
+      .attention ~ glance-bar-element {
+        margin-top: 0;
       }
 
       /* Bottom Card */
