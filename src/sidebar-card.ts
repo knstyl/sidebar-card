@@ -4113,23 +4113,67 @@ function subscribeEvents(appLayout: any, sidebarConfig: any, contentContainer: a
   }
 }
 
-function watchLocationChange() {
-  setTimeout(() => {
-    window.addEventListener('location-changed', () => {
+// True when the lovelace object belongs to the dashboard in the current URL.
+// HA fires 'location-changed' before it renders the new dashboard, so the
+// lovelace object found at that moment can still be the previous dashboard.
+function lovelaceMatchesLocation(lovelace: any): boolean {
+  const segment = window.location.pathname.split('/')[1] || '';
+  const urlPath = lovelace && lovelace.urlPath != null ? lovelace.urlPath : null;
+  if (urlPath === null) {
+    return segment === 'lovelace' || segment === '';
+  }
+  return urlPath === segment;
+}
+
+// Wait until the dashboard in the current URL is rendered and has a #view.
+// Returns null if that does not happen in time (for example, a non-lovelace panel).
+async function waitForCurrentLovelace(timeoutMs = 5000, intervalMs = 100) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const lovelace = getLovelace();
+    if (lovelace && lovelace.config && lovelaceMatchesLocation(lovelace)) {
       const root = getRoot();
-      if (!root) return; // location changed before finishing dom rendering
+      const appLayout = root && root.shadowRoot && root.shadowRoot.querySelector('div');
+      if (appLayout && appLayout.querySelector('#view')) {
+        return lovelace;
+      }
+    }
+    await sleep(intervalMs);
+  }
+  return null;
+}
+
+let sidebarCheckRunning = false;
+let sidebarCheckAgain = false;
+
+// Build the sidebar for the current dashboard if it has a sidebar config and no sidebar yet.
+async function ensureSidebar() {
+  if (sidebarCheckRunning) {
+    sidebarCheckAgain = true;
+    return;
+  }
+  sidebarCheckRunning = true;
+  try {
+    do {
+      sidebarCheckAgain = false;
+      const lovelace = await waitForCurrentLovelace();
+      if (!lovelace || !lovelace.config.sidebar) continue;
+      const root = getRoot();
       const appLayout = root.shadowRoot.querySelector('div');
       const customSidebarWrapper = appLayout.querySelector('#customSidebarWrapper');
-      if (!customSidebarWrapper) {
-        buildSidebar();
-      } else {
-        const customSidebar = customSidebarWrapper.querySelector('#customSidebar');
-        if (!customSidebar) {
-          buildSidebar();
-        }
+      if (!customSidebarWrapper || !customSidebarWrapper.querySelector('#customSidebar')) {
+        await buildSidebar(lovelace);
       }
-    });
-  }, 1000);
+    } while (sidebarCheckAgain);
+  } finally {
+    sidebarCheckRunning = false;
+  }
+}
+
+function watchLocationChange() {
+  window.addEventListener('location-changed', () => {
+    ensureSidebar();
+  });
 }
 
 // build the custom sidebar card
@@ -4172,8 +4216,8 @@ function createElementFromHTML(htmlString: string) {
 // ###   The Sidebar Card code base initialisation
 // ##########################################################################################
 
-async function buildSidebar() {
-  const lovelace = await getConfig();
+async function buildSidebar(currentLovelace?: any) {
+  const lovelace = currentLovelace || (await getConfig());
   if (lovelace.config.sidebar) {
     const sidebarConfig = Object.assign({}, lovelace.config.sidebar);
     if (!sidebarConfig.width || (sidebarConfig.width && typeof sidebarConfig.width == 'number' && sidebarConfig.width > 0 && sidebarConfig.width < 100) || (sidebarConfig.width && typeof sidebarConfig.width == 'object')) {
@@ -4225,6 +4269,10 @@ async function buildSidebar() {
       }
 
       let appLayout = root.shadowRoot.querySelector('div');
+      if (appLayout.querySelector('#customSidebarWrapper #customSidebar')) {
+        // Another build already added the sidebar to this dashboard.
+        return;
+      }
       let css = createCSS(sidebarConfig, document.body.clientWidth);
       let style: any = document.createElement('style');
       style.setAttribute('id', 'customSidebarStyle');
