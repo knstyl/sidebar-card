@@ -73,6 +73,11 @@ const NOTIFICATION_SEVERITY_RANK: { [key in NotificationSeverity]: number } = {
 const NOTIFICATION_PANEL_IDLE_MS = 30000;
 const NOTIFICATION_DISMISS_ANIMATION_MS = 200;
 const NOTIFICATION_STACK_PEEK_PX = 9;
+// Swipe left to dismiss: start a drag after this many px, dismiss past the
+// larger of the two distances below.
+const NOTIFICATION_SWIPE_SLOP_PX = 10;
+const NOTIFICATION_SWIPE_MIN_PX = 60;
+const NOTIFICATION_SWIPE_RATIO = 0.3;
 
 const NOTIFICATION_ICONS: { [key in NotificationSeverity]: any } = {
   error: svg`<circle cx="12" cy="12" r="10"></circle><path d="M15 9l-6 6M9 9l6 6"></path>`,
@@ -97,6 +102,9 @@ class NotificationsElement extends LitElement {
   private _subscribing = false;
   private _expandedKeys: Set<string> = new Set();
   private _dismissingKeys: Set<string> = new Set();
+  private _swipedKeys: Set<string> = new Set();
+  private _swipe: { key: string; el: HTMLElement; x: number; y: number; dx: number; drag: boolean; id: number } | null = null;
+  private _suppressClickUntil = 0;
   private _idleTimer: number | null = null;
   private _clockTimer: number | null = null;
   private _sidebarInner: HTMLElement | null = null;
@@ -283,9 +291,82 @@ class NotificationsElement extends LitElement {
         this.hass.callService('persistent_notification', 'dismiss', { notification_id: id })
       );
       this._dismissingKeys.delete(group.key);
+      this._swipedKeys.delete(group.key);
       this._expandedKeys.delete(group.key);
       this.requestUpdate();
     }, NOTIFICATION_DISMISS_ANIMATION_MS);
+  }
+
+  // Swipe a card to the left to dismiss it. Vertical movement is left to the
+  // browser, so the panel list still scrolls.
+  private _onCardPointerDown(group: NotificationGroup, e: PointerEvent): void {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('a, button')) return;
+    this._swipe = {
+      key: group.key,
+      el: e.currentTarget as HTMLElement,
+      x: e.clientX,
+      y: e.clientY,
+      dx: 0,
+      drag: false,
+      id: e.pointerId
+    };
+  }
+
+  private _onCardPointerMove(e: PointerEvent): void {
+    const s = this._swipe;
+    if (!s || e.pointerId !== s.id) return;
+    const dx = e.clientX - s.x;
+    const dy = e.clientY - s.y;
+    if (!s.drag) {
+      if (Math.abs(dy) > NOTIFICATION_SWIPE_SLOP_PX && Math.abs(dy) > Math.abs(dx)) {
+        this._swipe = null; // vertical scroll, not a swipe
+        return;
+      }
+      if (Math.abs(dx) > NOTIFICATION_SWIPE_SLOP_PX && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        s.drag = true;
+        try {
+          s.el.setPointerCapture(e.pointerId);
+        } catch (err) {
+          /* pointer already released */
+        }
+      }
+    }
+    if (s.drag) {
+      s.dx = Math.min(0, dx);
+      s.el.style.transition = 'none';
+      s.el.style.transform = `translateX(${s.dx}px)`;
+      s.el.style.opacity = String(Math.max(0.2, 1 + s.dx / (s.el.offsetWidth || 1)));
+      this._bumpIdle();
+    }
+  }
+
+  private _onCardPointerUp(group: NotificationGroup, e: PointerEvent): void {
+    const s = this._swipe;
+    if (!s || e.pointerId !== s.id) return;
+    this._swipe = null;
+    if (!s.drag) return;
+    // the pointerup of a drag must not also expand the message
+    this._suppressClickUntil = Date.now() + 400;
+    s.el.style.transition = '';
+    if (s.dx < -Math.max(NOTIFICATION_SWIPE_MIN_PX, s.el.offsetWidth * NOTIFICATION_SWIPE_RATIO)) {
+      // keep the inline transform; the .dismissing.swiped rule (!important)
+      // animates the card from where the finger left it
+      this._swipedKeys.add(group.key);
+      this._dismissGroup(group);
+    } else {
+      s.el.style.transform = '';
+      s.el.style.opacity = '';
+    }
+  }
+
+  private _onCardPointerCancel(): void {
+    const s = this._swipe;
+    this._swipe = null;
+    if (!s) return;
+    s.el.style.transition = '';
+    s.el.style.transform = '';
+    s.el.style.opacity = '';
   }
 
   private _dismissAll(): void {
@@ -297,6 +378,7 @@ class NotificationsElement extends LitElement {
 
   private _toggleMessage(group: NotificationGroup, e: Event): void {
     if ((e.target as HTMLElement).closest('a')) return; // let links work
+    if (Date.now() < this._suppressClickUntil) return; // end of a swipe
     if (this._expandedKeys.has(group.key)) this._expandedKeys.delete(group.key);
     else this._expandedKeys.add(group.key);
     this.requestUpdate();
@@ -359,10 +441,16 @@ class NotificationsElement extends LitElement {
       'card',
       group.severity,
       expanded ? 'expanded' : '',
-      this._dismissingKeys.has(group.key) ? 'dismissing' : ''
+      this._dismissingKeys.has(group.key) ? 'dismissing' : '',
+      this._swipedKeys.has(group.key) ? 'swiped' : '',
+      opts.inStack ? '' : 'swipeable'
     ].join(' ');
     return html`
-      <div class="${classes}">
+      <div class="${classes}"
+        @pointerdown="${opts.inStack ? null : (e: PointerEvent) => this._onCardPointerDown(group, e)}"
+        @pointermove="${opts.inStack ? null : (e: PointerEvent) => this._onCardPointerMove(e)}"
+        @pointerup="${opts.inStack ? null : (e: PointerEvent) => this._onCardPointerUp(group, e)}"
+        @pointercancel="${opts.inStack ? null : () => this._onCardPointerCancel()}">
         <div class="card-head">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -533,6 +621,16 @@ class NotificationsElement extends LitElement {
       .card.dismissing {
         opacity: 0 !important;
         transform: translateX(40px) !important;
+      }
+
+      /* swipe left to dismiss: leave vertical panning to the browser */
+      .card.swipeable {
+        touch-action: pan-y;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .card.dismissing.swiped {
+        transform: translateX(-110%) !important;
       }
 
       /* ---------- stacked: cards share one grid cell, back cards peek out ---------- */
