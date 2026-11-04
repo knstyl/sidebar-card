@@ -217,6 +217,9 @@ A theme can also set these variables. The defaults are for a dark sidebar. For a
 | `sidebar-notification-background` | `#18263f` | Notification and trend cards |
 | `sidebar-notification-scrim` | `rgba(9, 16, 31, 0.86)` | Scrim behind the notification panel |
 | `sidebar-tooltip-background` | `#0b1424` | Trend chart tooltip |
+| `sidebar-selected-overlay-color` | `sidebar-selected-icon-color` | Tint (12%) on the selected menu item |
+| `sidebar-selected-border-color` | accent at 30% | Border of the selected menu item |
+| `sidebar-selected-shadow` | `0 4px 12px` accent at 15% | Shadow of the selected menu item |
 | `sidebar-error-color`, `sidebar-warning-color`, `sidebar-info-color`, `sidebar-success-color` | `#ef4444`, `#f59e0b`, `#3b82f6`, `#10b981` | Notification severity |
 
 Example for a light theme (in the theme YAML):
