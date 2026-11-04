@@ -3339,8 +3339,8 @@ class SidebarCard extends LitElement {
       .sidebarMenu li.active {
         color: var(--sidebar-selected-text-color);
         background: var(--sidebar-selected-background);
-        border-color: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3);
-        box-shadow: 0 4px 12px rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.15);
+        border-color: var(--sidebar-selected-border-color, rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3));
+        box-shadow: var(--sidebar-selected-shadow, 0 4px 12px rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.15));
         transform: translateX(4px);
       }
 
@@ -3351,7 +3351,7 @@ class SidebarCard extends LitElement {
         left: 0;
         width: 100%;
         height: 100%;
-        background-color: var(--sidebar-selected-icon-color, #000);
+        background-color: var(--sidebar-selected-overlay-color, var(--sidebar-selected-icon-color, #000));
         opacity: 0.12;
         border-radius: 12px;
       }
