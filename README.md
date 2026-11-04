@@ -204,6 +204,32 @@ sidebar:
 
 ```
 
+A theme can also set these variables. The defaults are for a dark sidebar. For a light theme, set the RGB variables to a dark color, so the tints and the secondary text stay readable.
+
+| Variable | Default | Used for |
+|---|---|---|
+| `sidebar-background` | — | Sidebar background |
+| `sidebar-text-color` | `#f1f5f9` | Main text |
+| `sidebar-text-rgb` | `241, 245, 249` | Secondary and muted text (with alpha) |
+| `sidebar-overlay-rgb` | `255, 255, 255` | Tints, hover and pressed states, borders (with alpha) |
+| `sidebar-accent-rgb` | `96, 165, 250` | Accent: selection, dismiss button, clock hand |
+| `sidebar-clock-color` | `#ffffff` | Digital clock and date |
+| `sidebar-notification-background` | `#18263f` | Notification and trend cards |
+| `sidebar-notification-scrim` | `rgba(9, 16, 31, 0.86)` | Scrim behind the notification panel |
+| `sidebar-tooltip-background` | `#0b1424` | Trend chart tooltip |
+| `sidebar-error-color`, `sidebar-warning-color`, `sidebar-info-color`, `sidebar-success-color` | `#ef4444`, `#f59e0b`, `#3b82f6`, `#10b981` | Notification severity |
+
+Example for a light theme (in the theme YAML):
+
+```yaml
+sidebar-background: "rgba(255, 255, 255, 0.72)"
+sidebar-text-color: "#22304A"
+sidebar-text-rgb: "34, 48, 74"
+sidebar-overlay-rgb: "34, 48, 74"
+sidebar-clock-color: "#22304A"
+sidebar-notification-background: "#FFFFFF"
+```
+
 #### Bottom Custom Card
 
 To start, add `bottomCard` to your sidebar config.
