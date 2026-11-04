@@ -542,15 +542,15 @@ class NotificationsElement extends LitElement {
         width: 100%;
         /* themable; override from the card's style: option */
         --ns-text: var(--sidebar-text-color, #f1f5f9);
-        --ns-text-2: rgba(241, 245, 249, 0.72);
-        --ns-text-3: rgba(241, 245, 249, 0.5);
+        --ns-text-2: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.72);
+        --ns-text-3: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.5);
         --ns-card-bg: var(--sidebar-notification-background, #18263f);
-        --ns-card-border: rgba(255, 255, 255, 0.08);
+        --ns-card-border: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
         --ns-scrim: var(--sidebar-notification-scrim, rgba(9, 16, 31, 0.86));
-        --ns-error: #ef4444;
-        --ns-warning: #f59e0b;
-        --ns-info: #3b82f6;
-        --ns-success: #10b981;
+        --ns-error: var(--sidebar-error-color, #ef4444);
+        --ns-warning: var(--sidebar-warning-color, #f59e0b);
+        --ns-info: var(--sidebar-info-color, #3b82f6);
+        --ns-success: var(--sidebar-success-color, #10b981);
         /* no position here: the panel must resolve against .sidebar-inner */
       }
 
@@ -721,7 +721,7 @@ class NotificationsElement extends LitElement {
       }
 
       .card-close:active {
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.1);
         color: var(--ns-text);
       }
 
@@ -765,7 +765,7 @@ class NotificationsElement extends LitElement {
         font-size: 12px;
         padding: 0 4px;
         border-radius: 4px;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
       }
 
       .stack-hint {
@@ -843,7 +843,7 @@ class NotificationsElement extends LitElement {
         padding: 2px 8px;
         border-radius: 999px;
         margin-left: 8px;
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.12);
         color: var(--ns-text-2);
         vertical-align: 2px;
       }
@@ -854,7 +854,7 @@ class NotificationsElement extends LitElement {
         display: grid;
         place-items: center;
         border-radius: 12px;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
         border: none;
         padding: 0;
         color: var(--ns-text);
@@ -867,7 +867,7 @@ class NotificationsElement extends LitElement {
       }
 
       .panel-close:active {
-        background: rgba(255, 255, 255, 0.16);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.16);
       }
 
       .panel-list {
@@ -897,7 +897,7 @@ class NotificationsElement extends LitElement {
         min-height: 44px;
         border-radius: 12px;
         cursor: pointer;
-        background: rgba(255, 255, 255, 0.06);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.06);
         border: 1px solid var(--ns-card-border);
         color: var(--ns-text-2);
         font: inherit;
@@ -906,7 +906,7 @@ class NotificationsElement extends LitElement {
       }
 
       .clear-all:active {
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.12);
         color: var(--ns-text);
       }
 
@@ -1273,26 +1273,26 @@ class GlanceBarElement extends LitElement {
         display: flex;
         align-items: center;
         justify-content: center;
-        background: var(--sidebar-card-background, rgba(255, 255, 255, 0.06));
-        border: 1px solid var(--sidebar-border-color, rgba(255, 255, 255, 0.1));
+        background: var(--sidebar-card-background, rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.06));
+        border: 1px solid var(--sidebar-border-color, rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.1));
         border-radius: 12px;
         cursor: pointer;
         transition: transform 0.2s ease, background 0.2s ease;
       }
 
       .glance-item:hover {
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.12);
         transform: scale(1.08);
       }
 
       .glance-item ha-icon {
-        color: var(--sidebar-icon-color, rgba(255, 255, 255, 0.85));
+        color: var(--sidebar-icon-color, rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.85));
         --mdc-icon-size: 22px;
         display: flex;
       }
 
       .glance-item.has-badge ha-icon {
-        color: var(--sidebar-selected-icon-color, #60a5fa);
+        color: var(--sidebar-selected-icon-color, rgb(var(--sidebar-accent-rgb, 96, 165, 250)));
       }
 
       .glance-badge {
@@ -1364,7 +1364,7 @@ class GlanceBarElement extends LitElement {
             color-mix(in srgb, var(--sev) 14%, transparent)
           ),
           var(--sidebar-notification-background, #18263f);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
         border-radius: 12px;
       }
 
@@ -1409,7 +1409,7 @@ class GlanceBarElement extends LitElement {
 
       .alert-since {
         font-size: 12px;
-        color: rgba(241, 245, 249, 0.5);
+        color: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.5);
         flex-shrink: 0;
       }
 
@@ -1423,12 +1423,12 @@ class GlanceBarElement extends LitElement {
         font: inherit;
         font-size: 13px;
         font-weight: 500;
-        color: rgba(241, 245, 249, 0.72);
+        color: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.72);
         cursor: pointer;
       }
 
       .alert-more:active {
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
       }
     `;
   }
@@ -1541,7 +1541,7 @@ class PresenceElement extends LitElement {
         font-size: 12px;
         font-weight: 600;
         color: var(--sidebar-text-color, #fff);
-        background: rgba(255, 255, 255, 0.14);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.14);
       }
 
       /* away: dim the avatar so "who's home" reads at a glance */
@@ -2209,9 +2209,9 @@ class TrendsElement extends LitElement {
         display: block;
         --trend-surface: var(--sidebar-notification-background, #18263f);
         --trend-text: var(--sidebar-text-color, #f1f5f9);
-        --trend-text-2: rgba(241, 245, 249, 0.72);
-        --trend-text-3: rgba(241, 245, 249, 0.5);
-        --trend-border: rgba(255, 255, 255, 0.08);
+        --trend-text-2: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.72);
+        --trend-text-3: rgba(var(--sidebar-text-rgb, 241, 245, 249), 0.5);
+        --trend-border: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
       }
 
       .trends {
@@ -2235,7 +2235,7 @@ class TrendsElement extends LitElement {
 
       .range {
         display: flex;
-        background: rgba(255, 255, 255, 0.05);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.05);
         border-radius: 8px;
         padding: 2px;
       }
@@ -2254,7 +2254,7 @@ class TrendsElement extends LitElement {
       }
 
       .range button[aria-pressed='true'] {
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.12);
         color: var(--trend-text);
       }
 
@@ -2360,7 +2360,7 @@ class TrendsElement extends LitElement {
       }
 
       .grid {
-        stroke: rgba(255, 255, 255, 0.07);
+        stroke: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.07);
       }
 
       .hair {
@@ -2395,7 +2395,7 @@ class TrendsElement extends LitElement {
         position: absolute;
         top: -6px;
         transform: translate(-50%, -100%);
-        background: #0b1424;
+        background: var(--sidebar-tooltip-background, #0b1424);
         border: 1px solid var(--trend-border);
         border-radius: 8px;
         padding: 6px 8px;
@@ -3318,7 +3318,7 @@ class SidebarCard extends LitElement {
       }
 
       .sidebarMenu li:hover {
-        background-color: rgba(255, 255, 255, 0.06);
+        background-color: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.06);
         border-color: var(--sidebar-border-color);
         transform: translateX(2px);
       }
@@ -3339,8 +3339,8 @@ class SidebarCard extends LitElement {
       .sidebarMenu li.active {
         color: var(--sidebar-selected-text-color);
         background: var(--sidebar-selected-background);
-        border-color: rgba(96, 165, 250, 0.3);
-        box-shadow: 0 4px 12px rgba(96, 165, 250, 0.15);
+        border-color: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3);
+        box-shadow: 0 4px 12px rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.15);
         transform: translateX(4px);
       }
 
@@ -3383,7 +3383,7 @@ class SidebarCard extends LitElement {
         font-weight: 200;
         cursor: default;
         letter-spacing: -0.03em;
-        color: #ffffff;
+        color: var(--sidebar-clock-color, #ffffff);
         text-align: center;
       }
 
@@ -3456,8 +3456,8 @@ class SidebarCard extends LitElement {
       }
 
       .weather-widget:hover {
-        background: rgba(255, 255, 255, 0.08);
-        border-color: rgba(96, 165, 250, 0.3);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
+        border-color: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3);
       }
 
       .weather-icon {
@@ -3467,7 +3467,7 @@ class SidebarCard extends LitElement {
         display: flex;
         justify-content: center;
         align-items: center;
-        background: rgba(96, 165, 250, 0.1);
+        background: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.1);
         border-radius: 10px;
         padding: 8px;
       }
@@ -3499,7 +3499,7 @@ class SidebarCard extends LitElement {
         font-weight: 500;
         line-height: 28px;
         margin-bottom: 2px;
-        color: #ffffff;
+        color: var(--sidebar-clock-color, #ffffff);
       }
 
       .weather-desc {
@@ -3516,7 +3516,7 @@ class SidebarCard extends LitElement {
         padding-top: 55%;
         width: 55%;
         border-radius: 100%;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
         font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
         border: 2px solid var(--sidebar-border-color);
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -3570,7 +3570,7 @@ class SidebarCard extends LitElement {
         bottom: 0;
         right: 0;
         border-radius: 1px;
-        background: #60a5fa;
+        background: rgb(var(--sidebar-accent-rgb, 96, 165, 250));
         transform-origin: bottom center;
         transform: rotate(180deg);
         z-index: 1;
@@ -3585,8 +3585,8 @@ class SidebarCard extends LitElement {
         width: 8px;
         height: 8px;
         border-radius: 100px;
-        background: #60a5fa;
-        border: 2px solid #1a1a1a;
+        background: rgb(var(--sidebar-accent-rgb, 96, 165, 250));
+        border: 2px solid var(--sidebar-background, #1a1a1a);
         margin: auto;
         z-index: 2;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -3611,8 +3611,8 @@ class SidebarCard extends LitElement {
       }
 
       .notification-card:hover {
-        background: rgba(255, 255, 255, 0.08);
-        border-color: rgba(96, 165, 250, 0.3);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.08);
+        border-color: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3);
       }
 
       .no-notifications {
@@ -3659,7 +3659,7 @@ class SidebarCard extends LitElement {
       }
 
       .notification-icon.info {
-        color: #60a5fa;
+        color: rgb(var(--sidebar-accent-rgb, 96, 165, 250));
       }
 
       .notification-icon.success {
@@ -3689,7 +3689,7 @@ class SidebarCard extends LitElement {
       }
 
       .dismiss-icon-btn:hover {
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.1);
       }
 
       .dismiss-icon-btn svg {
@@ -3731,7 +3731,7 @@ class SidebarCard extends LitElement {
       }
 
       .dismiss-btn {
-        background: #60a5fa;
+        background: rgb(var(--sidebar-accent-rgb, 96, 165, 250));
         color: #ffffff;
         border: none;
         padding: 6px 12px;
@@ -3833,17 +3833,17 @@ class SidebarCard extends LitElement {
       }
 
       ::-webkit-scrollbar-track {
-        background: rgba(255, 255, 255, 0.05);
+        background: rgba(var(--sidebar-overlay-rgb, 255, 255, 255), 0.05);
         border-radius: 3px;
       }
 
       ::-webkit-scrollbar-thumb {
-        background: rgba(96, 165, 250, 0.3);
+        background: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.3);
         border-radius: 3px;
       }
 
       ::-webkit-scrollbar-thumb:hover {
-        background: rgba(96, 165, 250, 0.5);
+        background: rgba(var(--sidebar-accent-rgb, 96, 165, 250), 0.5);
       }
     `;
   }
